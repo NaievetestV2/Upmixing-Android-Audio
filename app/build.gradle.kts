@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.androidsurround"
     compileSdk = 35
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.androidsurround"
@@ -46,7 +47,6 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/native/CMakeLists.txt")
-            version = "3.31.4"
         }
     }
 }

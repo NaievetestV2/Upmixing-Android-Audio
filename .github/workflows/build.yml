@@ -25,9 +25,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Create local.properties
-        run: |
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
-          echo "ndk.dir=$ANDROID_HOME/ndk/27.2.12479018" >> local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
 
       - name: Install NDK
         run: |
