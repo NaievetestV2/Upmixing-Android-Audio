@@ -13,6 +13,10 @@ import kotlinx.coroutines.flow.asStateFlow
 class AudioEngine(private val context: Context) {
 
     private val upmixProcessor = UpmixProcessor()
+
+    init {
+        NativeEngine.load()
+    }
     private val multiSink = MultiSinkManager(context)
 
     private val _isActive = MutableStateFlow(false)
