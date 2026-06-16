@@ -66,7 +66,8 @@ class MainActivity : ComponentActivity() {
                     val availableDevices by deviceManager.availableSinks.collectAsStateWithLifecycle()
                     val selectedDevices by deviceManager.selectedDevices.collectAsStateWithLifecycle()
                     val isEngineActive by audioEngine.isActive.collectAsStateWithLifecycle()
-                    var rootStatus by remember { mutableStateOf(RootShell.RootStatus()) }
+                    val rootStatusState = remember { mutableStateOf(RootShell.RootStatus()) }
+                    var rootStatus: RootShell.RootStatus by rootStatusState
 
                     LaunchedEffect(Unit) {
                         rootStatus = RootShell.checkRoot()

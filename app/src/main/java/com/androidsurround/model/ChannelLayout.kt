@@ -20,9 +20,9 @@ data class ChannelLayout(
     val name: String,
     val displayName: String,
     val channels: List<ChannelPosition>,
-    val channelCount: Int get() = channels.size,
-    val speakerMask: Int get() = channels.fold(0) { acc, c -> acc or c.maskBit }
 ) {
+    val channelCount: Int get() = channels.size
+    val speakerMask: Int get() = channels.fold(0) { acc, c -> acc or c.maskBit }
     companion object {
         val STEREO = ChannelLayout("2.0", "Stereo (2.0)", listOf(
             ChannelPosition.FL, ChannelPosition.FR

@@ -18,7 +18,7 @@ import com.androidsurround.model.AudioDevice
 import com.androidsurround.model.ChannelLayout
 import com.androidsurround.model.UpmixConfig
 import com.androidsurround.playback.PlaybackState
-import com.androidsurround.root.RootStatus
+import com.androidsurround.root.RootShell.RootStatus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

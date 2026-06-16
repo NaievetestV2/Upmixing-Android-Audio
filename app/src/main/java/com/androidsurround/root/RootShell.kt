@@ -3,12 +3,12 @@ package com.androidsurround.root
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-data class RootStatus(
-    val available: Boolean = false,
-    val hasSu: Boolean = false,
-)
-
 class RootShell {
+
+    data class RootStatus(
+        val available: Boolean = false,
+        val hasSu: Boolean = false,
+    )
 
     companion object {
         private var cachedStatus: RootStatus? = null

@@ -34,7 +34,6 @@ class AudioEngine(private val context: Context) {
     private val _sampleRate = MutableStateFlow(48000)
     val sampleRate: StateFlow<Int> = _sampleRate.asStateFlow()
 
-    private var pipeline: AudioPipeline? = null
     private var scope: CoroutineScope? = null
 
     fun setLayout(layout: ChannelLayout) {
