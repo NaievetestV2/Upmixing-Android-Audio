@@ -34,6 +34,8 @@ class PipelineAudioSink(context: Context) : AudioSink {
 
     override fun supportsFormat(format: Format): Boolean = true
 
+    override fun getFormatSupport(format: Format): Int = AudioSink.FORMAT_HANDLED
+
     override fun getCurrentPositionUs(sourceEnded: Boolean): Long =
         defaultSink.getCurrentPositionUs(sourceEnded)
 

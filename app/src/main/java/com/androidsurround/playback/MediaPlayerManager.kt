@@ -6,6 +6,7 @@ import android.view.SurfaceHolder
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,9 +30,9 @@ class MediaPlayerManager(private val context: Context) {
 
     init {
         pipelineSink = PipelineAudioSink(context)
-        player = ExoPlayer.Builder(context)
+        val renderersFactory = DefaultRenderersFactory(context)
             .setAudioSink(pipelineSink)
-            .build()
+        player = ExoPlayer.Builder(context, renderersFactory).build()
     }
 
     fun setPcmCallback(callback: PcmCallback?) {
