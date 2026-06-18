@@ -5,7 +5,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
-import android.provider.OpenableColumns
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,15 +15,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.androidsurround.audio.AudioEngine
 import com.androidsurround.audio.DeviceManager
 import com.androidsurround.model.AudioDevice
-import com.androidsurround.model.ChannelLayout
-import com.androidsurround.model.UpmixConfig
 import com.androidsurround.playback.MediaPlayerManager
 import com.androidsurround.root.RootShell
+import com.androidsurround.ui.BrowserSheet
 import com.androidsurround.ui.MainScreen
 import com.androidsurround.ui.theme.AndroidSurroundTheme
 
@@ -31,18 +33,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var deviceManager: DeviceManager
     private lateinit var audioEngine: AudioEngine
     private lateinit var mediaPlayer: MediaPlayerManager
-
-    private var urlInputCallback: ((String) -> Unit)? = null
+    private var surfaceHolder: SurfaceHolder? = null
 
     private val openFileLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        uri?.let { mediaPlayer.playUri(it) }
-    }
-
-    private val openUrlLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { /* URL handled via dialog */ }
+    ) { uri: Uri? -> uri?.let { mediaPlayer.playUri(it) } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,6 +63,7 @@ class MainActivity : ComponentActivity() {
                     val isEngineActive by audioEngine.isActive.collectAsStateWithLifecycle()
                     val rootStatusState = remember { mutableStateOf(RootShell.RootStatus()) }
                     var rootStatus: RootShell.RootStatus by rootStatusState
+                    var showBrowser by remember { mutableStateOf(false) }
 
                     LaunchedEffect(Unit) {
                         rootStatus = RootShell.checkRoot()
@@ -83,75 +79,62 @@ class MainActivity : ComponentActivity() {
                         rootStatus = rootStatus,
                         onTogglePlayPause = { mediaPlayer.togglePlayPause() },
                         onSeek = { mediaPlayer.seekTo(it) },
-                        onOpenUrlAction = { showUrlInputDialog() },
+                        onOpenUrl = { url -> mediaPlayer.playUrl(url) },
                         onOpenFileAction = { openFilePicker() },
+                        onOpenBrowser = { showBrowser = true },
                         onLayoutSelected = { audioEngine.setLayout(it) },
                         onUpmixConfigChanged = { audioEngine.setUpmixConfig(it) },
-                        onDeviceToggle = { device -> toggleDevice(device) },
+                        onDeviceToggle = { toggleDevice(it) },
                         onRefreshDevices = { deviceManager.refreshDevices() },
                         onToggleEngine = { toggleEngine() },
                     )
+
+                    if (showBrowser) {
+                        BrowserSheet(
+                            onDismiss = { showBrowser = false },
+                            onUrlSelected = { url ->
+                                showBrowser = false
+                                mediaPlayer.playUrl(url)
+                            },
+                        )
+                    }
                 }
             }
         }
     }
 
     private fun toggleDevice(device: AudioDevice) {
-        if (deviceManager.isSelected(device)) {
-            deviceManager.deselectDevice(device)
-        } else {
-            deviceManager.selectDevice(device)
-        }
+        if (deviceManager.isSelected(device)) deviceManager.deselectDevice(device)
+        else deviceManager.selectDevice(device)
         audioEngine.setDevices(deviceManager.selectedDevices.value.values.toList())
     }
 
     private fun toggleEngine() {
-        if (audioEngine.isActive.value) {
-            audioEngine.stopPipeline()
-        } else {
-            audioEngine.startPipeline()
-        }
+        if (audioEngine.isActive.value) audioEngine.stopPipeline()
+        else audioEngine.startPipeline()
     }
 
     private fun openFilePicker() {
-        try {
-            openFileLauncher.launch(arrayOf("audio/*", "video/*"))
-        } catch (_: Exception) {}
-    }
-
-    private fun showUrlInputDialog() {
-        urlInputCallback = { url ->
-            mediaPlayer.playUrl(url)
-        }
+        try { openFileLauncher.launch(arrayOf("audio/*", "video/*")) } catch (_: Exception) {}
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent.data?.let { uri ->
-            mediaPlayer.playUri(uri)
-        }
+        intent.data?.let { mediaPlayer.playUri(it) }
     }
 
     private fun requestAudioPermissions() {
         val permissions = mutableListOf<String>()
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_AUDIO)
             != PackageManager.PERMISSION_GRANTED
-        ) {
-            permissions.add(Manifest.permission.READ_MEDIA_AUDIO)
-        }
+        ) permissions.add(Manifest.permission.READ_MEDIA_AUDIO)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
-        ) {
-            permissions.add(Manifest.permission.RECORD_AUDIO)
-        }
-        if (permissions.isNotEmpty()) {
-            requestPermissions(permissions.toTypedArray(), 100)
-        }
+        ) permissions.add(Manifest.permission.RECORD_AUDIO)
+        if (permissions.isNotEmpty()) requestPermissions(permissions.toTypedArray(), 100)
     }
 
     override fun onDestroy() {
-        audioEngine.release()
-        mediaPlayer.release()
-        super.onDestroy()
+        audioEngine.release(); mediaPlayer.release(); super.onDestroy()
     }
 }

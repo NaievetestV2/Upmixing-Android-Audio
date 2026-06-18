@@ -1,6 +1,7 @@
 package com.androidsurround.ui
 
-import android.net.Uri
+import android.view.SurfaceHolder
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -9,9 +10,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.androidsurround.playback.PlaybackState
 
 @Composable
@@ -19,8 +23,9 @@ fun MediaPlayerBar(
     state: PlaybackState,
     onTogglePlayPause: () -> Unit,
     onSeek: (Long) -> Unit,
-    onOpenUrl: () -> Unit,
+    onOpenUrl: (String) -> Unit,
     onOpenFile: () -> Unit,
+    onOpenBrowser: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showUrlDialog by remember { mutableStateOf(false) }
@@ -30,7 +35,7 @@ fun MediaPlayerBar(
         shape = RoundedCornerShape(16.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -39,56 +44,58 @@ fun MediaPlayerBar(
                 IconButton(onClick = onOpenFile) {
                     Icon(Icons.Filled.FolderOpen, contentDescription = "Open file")
                 }
+                IconButton(onClick = onOpenBrowser) {
+                    Icon(Icons.Filled.Language, contentDescription = "Web browser")
+                }
                 IconButton(onClick = { showUrlDialog = true }) {
-                    Icon(Icons.Filled.Link, contentDescription = "Open URL")
+                    Icon(Icons.Filled.Link, contentDescription = "Stream URL")
                 }
             }
 
-            if (state.currentTitle.isNotEmpty()) {
-                Text(
-                    text = state.currentTitle,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            } else {
-                Text(
-                    text = "No media loaded",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Text(
+                text = state.currentTitle.ifEmpty { "No media loaded" },
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (state.currentTitle.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurface,
+            )
+
+            if (state.hasVideo) {
+                Spacer(Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.Black),
                 )
             }
 
             Spacer(Modifier.height(8.dp))
 
-            if (state.durationMs > 0) {
-                Slider(
-                    value = state.positionMs.toFloat(),
-                    onValueChange = { onSeek(it.toLong()) },
-                    valueRange = 0f..state.durationMs.toFloat(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(formatTime(state.positionMs), style = MaterialTheme.typography.bodySmall)
-                    Text(formatTime(state.durationMs), style = MaterialTheme.typography.bodySmall)
-                }
+            Slider(
+                value = state.positionMs.toFloat()
+                    .coerceIn(0f, state.durationMs.toFloat().coerceAtLeast(1f)),
+                onValueChange = { onSeek(it.toLong()) },
+                valueRange = 0f..state.durationMs.toFloat().coerceAtLeast(1f),
+                modifier = Modifier.fillMaxWidth(),
+                enabled = state.durationMs > 0,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(formatTime(state.positionMs), style = MaterialTheme.typography.bodySmall)
+                Text(formatTime(state.durationMs), style = MaterialTheme.typography.bodySmall)
             }
-
-            Spacer(Modifier.height(8.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(
-                    onClick = onTogglePlayPause,
-                    modifier = Modifier.size(56.dp),
-                ) {
+                IconButton(onClick = onTogglePlayPause, modifier = Modifier.size(56.dp)) {
                     Icon(
                         imageVector = if (state.isPlaying) Icons.Filled.PauseCircleFilled
                                      else Icons.Filled.PlayCircleFilled,
@@ -100,61 +107,36 @@ fun MediaPlayerBar(
             }
 
             state.error?.let { error ->
-                Text(
-                    text = error,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+                Text(error, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error)
             }
         }
     }
 
     if (showUrlDialog) {
-        UrlInputDialog(
-            onDismiss = { showUrlDialog = false },
-            onSubmit = {
-                showUrlDialog = false
-                onOpenUrl()
+        var urlInput by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showUrlDialog = false },
+            title = { Text("Stream Audio URL") },
+            text = {
+                OutlinedTextField(
+                    value = urlInput, onValueChange = { urlInput = it },
+                    label = { Text("URL") }, placeholder = { Text("https://...") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                )
             },
+            confirmButton = {
+                TextButton(
+                    onClick = { showUrlDialog = false; onOpenUrl(urlInput) },
+                    enabled = urlInput.isNotBlank(),
+                ) { Text("Play") }
+            },
+            dismissButton = { TextButton(onClick = { showUrlDialog = false }) { Text("Cancel") } },
         )
     }
 }
 
-@Composable
-private fun UrlInputDialog(
-    onDismiss: () -> Unit,
-    onSubmit: (String) -> Unit,
-) {
-    var url by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Stream Audio URL") },
-        text = {
-            OutlinedTextField(
-                value = url,
-                onValueChange = { url = it },
-                label = { Text("URL") },
-                placeholder = { Text("https://example.com/audio.mp3") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onSubmit(url) },
-                enabled = url.isNotBlank(),
-            ) { Text("Play") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
-}
-
-private fun formatTime(ms: Long): String {
+fun formatTime(ms: Long): String {
     val totalSec = ms / 1000
-    val min = totalSec / 60
-    val sec = totalSec % 60
-    return "%d:%02d".format(min, sec)
+    return "%d:%02d".format(totalSec / 60, totalSec % 60)
 }

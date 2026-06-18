@@ -24,8 +24,10 @@ class MultiSinkManager(private val context: Context) {
 
     private val tracks = mutableMapOf<String, AudioTrack>()
     private var sampleRate = 48000
-    private var bufferSize = 4096
+    private var bufferSize = 8192
     private var scope: CoroutineScope? = null
+    private val writeQueue = mutableListOf<Map<String, FloatArray>>()
+    private var writeJob: Job? = null
 
     data class DeviceChannelAssignment(
         val device: AudioDevice,
@@ -40,10 +42,10 @@ class MultiSinkManager(private val context: Context) {
         rate: Int,
     ) {
         sampleRate = rate
-        bufferSize = AudioTrack.getMinBufferSize(
+        bufferSize = (AudioTrack.getMinBufferSize(
             rate, AudioFormat.CHANNEL_OUT_STEREO,
-            AudioFormat.ENCODING_PCM_16BIT
-        ) * 2
+            AudioFormat.ENCODING_PCM_FLOAT
+        ) * 4).coerceAtLeast(8192)
 
         assignments = if (devices.size == 1) {
             listOf(DeviceChannelAssignment(devices.first(), layout.channels))
@@ -57,20 +59,15 @@ class MultiSinkManager(private val context: Context) {
         layout: ChannelLayout,
     ): List<DeviceChannelAssignment> {
         if (devices.isEmpty()) return emptyList()
-
         val nonLfeChannels = layout.channels.filter { it != ChannelPosition.LFE }
         val hasLfe = ChannelPosition.LFE in layout.channels
-
         val assignments = mutableListOf<DeviceChannelAssignment>()
         var chIdx = 0
-
         for ((i, device) in devices.withIndex()) {
             val chCount = if (i == devices.lastIndex) {
                 nonLfeChannels.size - chIdx
             } else {
-                (nonLfeChannels.size / devices.size)
-                    .coerceAtLeast(1)
-                    .coerceAtMost(2)
+                (nonLfeChannels.size / devices.size).coerceAtLeast(1).coerceAtMost(2)
             }
             val deviceChs = nonLfeChannels.subList(
                 chIdx, (chIdx + chCount).coerceAtMost(nonLfeChannels.size)
@@ -78,7 +75,6 @@ class MultiSinkManager(private val context: Context) {
             assignments.add(DeviceChannelAssignment(device, deviceChs))
             chIdx += chCount
         }
-
         if (hasLfe) {
             assignments.firstOrNull()?.let {
                 assignments[assignments.indexOf(it)] = it.copy(
@@ -86,15 +82,12 @@ class MultiSinkManager(private val context: Context) {
                 )
             }
         }
-
         return assignments
     }
 
     fun start() {
         if (_isRunning.value) return
         stop()
-
-        val deferred = CompletableDeferred<Unit>()
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         scope?.launch {
             for (assignment in assignments) {
@@ -105,9 +98,25 @@ class MultiSinkManager(private val context: Context) {
                 }
             }
             _isRunning.value = true
-            deferred.complete(Unit)
+            writeJob = launch {
+                while (isActive) {
+                    flushWriteQueue()
+                }
+            }
         }
-        runBlocking { deferred.await() }
+    }
+
+    private suspend fun flushWriteQueue() {
+        while (writeQueue.isNotEmpty()) {
+            val frameData = writeQueue.removeFirst()
+            for ((deviceId, track) in tracks) {
+                val data = frameData[deviceId] ?: continue
+                try {
+                    track.write(data, 0, data.size, AudioTrack.WRITE_BLOCKING)
+                } catch (_: Exception) {}
+            }
+        }
+        delay(5)
     }
 
     private fun createAudioTrack(assignment: DeviceChannelAssignment): AudioTrack? {
@@ -120,18 +129,15 @@ class MultiSinkManager(private val context: Context) {
             8 -> AudioFormat.CHANNEL_OUT_7POINT1_SURROUND
             else -> AudioFormat.CHANNEL_OUT_STEREO
         }
-
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
             .build()
-
         val format = AudioFormat.Builder()
             .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
             .setSampleRate(sampleRate)
             .setChannelMask(chMask)
             .build()
-
         return try {
             val track = AudioTrack.Builder()
                 .setAudioAttributes(attrs)
@@ -139,14 +145,9 @@ class MultiSinkManager(private val context: Context) {
                 .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
-
-            if (deviceInfo != null) {
-                track.setPreferredDevice(deviceInfo)
-            }
+            if (deviceInfo != null) track.setPreferredDevice(deviceInfo)
             track
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     private fun findDeviceInfo(device: AudioDevice): AudioDeviceInfo? {
@@ -156,21 +157,17 @@ class MultiSinkManager(private val context: Context) {
 
     fun writeFrames(frameData: Map<String, FloatArray>) {
         if (!_isRunning.value) return
-        for ((deviceId, track) in tracks) {
-            val data = frameData[deviceId] ?: continue
-            try {
-                track.write(data, 0, data.size, AudioTrack.WRITE_BLOCKING)
-            } catch (_: Exception) {}
+        synchronized(writeQueue) {
+            writeQueue.add(frameData)
         }
     }
 
     fun stop() {
+        writeJob?.cancel()
         _isRunning.value = false
+        synchronized(writeQueue) { writeQueue.clear() }
         for ((_, track) in tracks) {
-            try {
-                track.stop()
-                track.release()
-            } catch (_: Exception) {}
+            try { track.stop(); track.release() } catch (_: Exception) {}
         }
         tracks.clear()
         scope?.cancel()
