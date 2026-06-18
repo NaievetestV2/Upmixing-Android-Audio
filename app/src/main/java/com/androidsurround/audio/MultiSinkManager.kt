@@ -156,6 +156,9 @@ class MultiSinkManager(private val context: Context) {
                         snapshot = frameData.toMap()
                         frameData.clear()
                     }
+
+                    if (snapshot.isEmpty()) { delay(5); continue }
+
                     val trackSnapshot: Map<String, AudioTrack>
                     val chSnapshot: Map<String, Int>
                     synchronized(lock) {
@@ -180,20 +183,12 @@ class MultiSinkManager(private val context: Context) {
                                     written += byteChunk
                                 }
                             } catch (_: Exception) {}
-                        } else {
-                            try {
-                                val len = minOf(1024, silentBuf.size)
-                                track.write(silentBuf, 0, len, AudioTrack.WRITE_BLOCKING)
-                            } catch (_: Exception) {}
                         }
                     }
-                    if (snapshot.isEmpty()) delay(10)
                 }
             }
         }
     }
-
-    private val silentBuf by lazy { FloatArray(4096) }
 
     private fun findDeviceMask(device: AudioDeviceInfo?): Int {
         val chMasks = device?.channelMasks ?: return AudioFormat.CHANNEL_OUT_STEREO
@@ -227,7 +222,8 @@ class MultiSinkManager(private val context: Context) {
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
             if (deviceInfo != null) {
-                track.setPreferredDevice(deviceInfo)
+                val ok = track.setPreferredDevice(deviceInfo)
+                Log.d("MultiSink", "setPreferredDevice(${deviceInfo.productName}): $ok")
             }
             Log.d("MultiSink", "AudioTrack created: ch=$chCount, mask=$chMask, buf=$bufSize")
             track

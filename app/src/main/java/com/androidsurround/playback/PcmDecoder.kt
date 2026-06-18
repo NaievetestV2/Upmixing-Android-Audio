@@ -21,6 +21,8 @@ class PcmDecoder(private val context: Context) {
     var onEnded: (() -> Unit)? = null
     var onError: ((String) -> Unit)? = null
 
+    fun isRunning(): Boolean = running
+
     fun start(uri: Uri) {
         stop()
         running = true

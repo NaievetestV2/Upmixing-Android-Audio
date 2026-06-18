@@ -5,7 +5,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
-import android.view.SurfaceHolder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,7 +31,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var audioEngine: AudioEngine
     private lateinit var mediaPlayer: MediaPlayerManager
     private val pcmDecoder = PcmDecoder(this)
-    private var surfaceHolder: SurfaceHolder? = null
 
     private val openFileLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -76,7 +74,7 @@ class MainActivity : ComponentActivity() {
                         selectedDevices = selectedDevices,
                         isEngineActive = isEngineActive,
                         rootStatus = rootStatus,
-                        onTogglePlayPause = { mediaPlayer.togglePlayPause() },
+                        onTogglePlayPause = { togglePlayPause() },
                         onSeek = { mediaPlayer.seekTo(it) },
                         onOpenUrl = { url -> playUrl(url) },
                         onOpenFileAction = { openFilePicker() },
@@ -103,32 +101,52 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun playUri(uri: Uri) {
+        mediaPlayer.stopPlayback()
+        pcmDecoder.stop()
         mediaPlayer.playUri(uri)
         if (audioEngine.isActive.value) startDecoder(uri)
     }
 
     private fun playUrl(url: String) {
+        mediaPlayer.stopPlayback()
+        pcmDecoder.stop()
         mediaPlayer.playUrl(url)
         if (audioEngine.isActive.value) startDecoder(Uri.parse(url))
     }
 
+    private fun togglePlayPause() {
+        if (audioEngine.isActive.value) {
+            if (pcmDecoder.isRunning()) {
+                stopDecoder()
+                mediaPlayer.pausePlayback()
+            } else {
+                val uri = mediaPlayer.currentUri
+                if (uri != null) startDecoder(uri)
+            }
+        } else {
+            mediaPlayer.togglePlayPause()
+        }
+    }
+
     private fun startDecoder(uri: Uri) {
         pcmDecoder.stop()
+        mediaPlayer.pausePlayback()
         pcmDecoder.onPcmData = { data, ch, sr ->
-            android.util.Log.d("Pipeline", "PCM data: ${data.size} floats, $ch ch, $sr Hz")
             val frameData = audioEngine.processAudioFrame(data, ch)
             audioEngine.pushFrames(frameData)
         }
         pcmDecoder.onEnded = {
-            android.util.Log.d("Pipeline", "Decoder ended")
+            runOnUiThread { stopDecoder() }
         }
         pcmDecoder.onError = { err ->
             android.util.Log.e("Pipeline", "Decoder error: $err")
-            runOnUiThread {
-                mediaPlayer.setVolume(1f)
-            }
         }
         pcmDecoder.start(uri)
+    }
+
+    private fun stopDecoder() {
+        pcmDecoder.stop()
+        if (!audioEngine.isActive.value) mediaPlayer.resumePlayback()
     }
 
     private fun toggleDevice(device: AudioDevice) {
@@ -139,13 +157,14 @@ class MainActivity : ComponentActivity() {
 
     private fun toggleEngine() {
         if (audioEngine.isActive.value) {
-            audioEngine.stopPipeline()
             pcmDecoder.stop()
-            mediaPlayer.setVolume(1f)
+            audioEngine.stopPipeline()
+            mediaPlayer.resumePlayback()
         } else {
             audioEngine.startPipeline()
-            mediaPlayer.setVolume(0f)
-            val uri = mediaPlayer.playbackState.value.currentUri
+            if (!audioEngine.isActive.value) return
+            val uri = mediaPlayer.currentUri
+            mediaPlayer.pausePlayback()
             if (uri != null) startDecoder(uri)
         }
     }

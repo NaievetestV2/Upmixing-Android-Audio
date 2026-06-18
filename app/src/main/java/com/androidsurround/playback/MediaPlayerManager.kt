@@ -93,6 +93,11 @@ class MediaPlayerManager(private val context: Context) {
     fun playUrl(url: String) { playUri(Uri.parse(url)) }
     fun playFile(path: String) { playUri(Uri.parse("file://$path")) }
 
+    val currentUri: Uri? get() = _playbackState.value.currentUri
+
+    fun stopPlayback() { player.stop(); player.clearMediaItems() }
+    fun pausePlayback() { player.pause() }
+    fun resumePlayback() { player.play() }
     fun togglePlayPause() {
         if (player.isPlaying) player.pause() else player.play()
     }
