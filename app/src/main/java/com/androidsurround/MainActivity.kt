@@ -20,6 +20,7 @@ import com.androidsurround.audio.AudioEngine
 import com.androidsurround.audio.DeviceManager
 import com.androidsurround.model.AudioDevice
 import com.androidsurround.playback.MediaPlayerManager
+import com.androidsurround.playback.PcmDecoder
 import com.androidsurround.root.RootShell
 import com.androidsurround.ui.BrowserSheet
 import com.androidsurround.ui.MainScreen
@@ -30,11 +31,12 @@ class MainActivity : ComponentActivity() {
     private lateinit var deviceManager: DeviceManager
     private lateinit var audioEngine: AudioEngine
     private lateinit var mediaPlayer: MediaPlayerManager
+    private val pcmDecoder = PcmDecoder(this)
     private var surfaceHolder: SurfaceHolder? = null
 
     private val openFileLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? -> uri?.let { mediaPlayer.playUri(it) } }
+    ) { uri: Uri? -> uri?.let { playUri(it) } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,7 +78,7 @@ class MainActivity : ComponentActivity() {
                         rootStatus = rootStatus,
                         onTogglePlayPause = { mediaPlayer.togglePlayPause() },
                         onSeek = { mediaPlayer.seekTo(it) },
-                        onOpenUrl = { url -> mediaPlayer.playUrl(url) },
+                        onOpenUrl = { url -> playUrl(url) },
                         onOpenFileAction = { openFilePicker() },
                         onOpenBrowser = { showBrowser = true },
                         onLayoutSelected = { audioEngine.setLayout(it) },
@@ -91,13 +93,40 @@ class MainActivity : ComponentActivity() {
                             onDismiss = { showBrowser = false },
                             onUrlSelected = { url ->
                                 showBrowser = false
-                                mediaPlayer.playUrl(url)
+                                playUrl(url)
                             },
                         )
                     }
                 }
             }
         }
+    }
+
+    private fun playUri(uri: Uri) {
+        mediaPlayer.playUri(uri)
+        if (audioEngine.isActive.value) startDecoder(uri)
+    }
+
+    private fun playUrl(url: String) {
+        mediaPlayer.playUrl(url)
+        if (audioEngine.isActive.value) startDecoder(Uri.parse(url))
+    }
+
+    private fun startDecoder(uri: Uri) {
+        pcmDecoder.stop()
+        pcmDecoder.onPcmData = { data, ch, sr ->
+            val frameData = audioEngine.processAudioFrame(data, ch)
+            audioEngine.pushFrames(frameData)
+        }
+        pcmDecoder.onEnded = {
+            // optionally restart or signal completion
+        }
+        pcmDecoder.onError = { err ->
+            runOnUiThread {
+                mediaPlayer.setVolume(1f)
+            }
+        }
+        pcmDecoder.start(uri)
     }
 
     private fun toggleDevice(device: AudioDevice) {
@@ -109,14 +138,13 @@ class MainActivity : ComponentActivity() {
     private fun toggleEngine() {
         if (audioEngine.isActive.value) {
             audioEngine.stopPipeline()
-            mediaPlayer.setPcmCallback(null)
+            pcmDecoder.stop()
             mediaPlayer.setVolume(1f)
         } else {
             audioEngine.startPipeline()
-            mediaPlayer.setPcmCallback { buffer, ch, sr, enc ->
-                audioEngine.onPcmData(buffer, ch, sr, enc)
-            }
             mediaPlayer.setVolume(0f)
+            val uri = mediaPlayer.playbackState.value.currentUri
+            if (uri != null) startDecoder(uri)
         }
     }
 
@@ -126,7 +154,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent.data?.let { mediaPlayer.playUri(it) }
+        intent.data?.let { playUri(it) }
     }
 
     private fun requestAudioPermissions() {
@@ -141,6 +169,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        audioEngine.release(); mediaPlayer.release(); super.onDestroy()
+        pcmDecoder.stop(); audioEngine.release(); mediaPlayer.release(); super.onDestroy()
     }
 }
