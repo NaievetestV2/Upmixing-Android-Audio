@@ -36,6 +36,7 @@ class PcmDecoder(private val context: Context) {
     }
 
     private var pcmEncoding = MediaFormat.ENCODING_PCM_16BIT
+    private val targetSampleRate = 48000
 
     private fun decode(uri: Uri) {
         val extractor = MediaExtractor()
@@ -107,7 +108,10 @@ class PcmDecoder(private val context: Context) {
                             outBuf.limit(bufferInfo.offset + bufferInfo.size)
                             val floats = bufToFloat(outBuf, bufferInfo.size)
                             if (floats.isNotEmpty()) {
-                                onPcmData?.invoke(floats, channelCount, sampleRate)
+                                val resampled = if (sampleRate != targetSampleRate)
+                                    resample(floats, sampleRate, targetSampleRate, channelCount)
+                                else floats
+                                onPcmData?.invoke(resampled, channelCount, targetSampleRate)
                             }
                         }
                     }
@@ -170,6 +174,24 @@ class PcmDecoder(private val context: Context) {
             }
         }
         return arr
+    }
+
+    private fun resample(input: FloatArray, inRate: Int, outRate: Int, ch: Int): FloatArray {
+        val inFrames = input.size / ch
+        val outFrames = (inFrames * outRate / inRate).coerceAtLeast(1)
+        val ratio = inRate.toDouble() / outRate.toDouble()
+        val out = FloatArray(outFrames * ch)
+        for (f in 0 until outFrames) {
+            val srcPos = f * ratio
+            val srcIdx = srcPos.toInt().coerceAtMost(inFrames - 2)
+            val frac = (srcPos - srcIdx).toFloat()
+            for (c in 0 until ch) {
+                val s0 = input[srcIdx * ch + c]
+                val s1 = if (srcIdx + 1 < inFrames) input[(srcIdx + 1) * ch + c] else s0
+                out[f * ch + c] = s0 + (s1 - s0) * frac
+            }
+        }
+        return out
     }
 
     fun stop() {
