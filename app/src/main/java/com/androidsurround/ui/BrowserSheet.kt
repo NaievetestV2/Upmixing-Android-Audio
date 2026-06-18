@@ -94,18 +94,19 @@ fun BrowserSheet(
                         settings.displayZoomControls = false
 
                         webViewClient = object : WebViewClient() {
-                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                            override fun onPageStarted(view: WebView?, newUrl: String?, favicon: Bitmap?) {
                                 isLoading = true
-                                url?.let { currentUrl = it; this@BrowserSheet.url = it }
+                                newUrl?.let { currentUrl = it; url = it }
                             }
-                            override fun onPageFinished(view: WebView?, url: String?) {
+                            override fun onPageFinished(view: WebView?, newUrl: String?) {
                                 isLoading = false
-                                url?.let { currentUrl = it; this@BrowserSheet.url = it }
+                                newUrl?.let { currentUrl = it; url = it }
                             }
                             override fun shouldOverrideUrlLoading(
                                 view: WebView?, request: WebResourceRequest?
                             ): Boolean {
-                                request?.url?.toString()?.let { currentUrl = it; url = it }
+                                val reqUrl = request?.url?.toString()
+                                if (reqUrl != null) { currentUrl = reqUrl; url = reqUrl }
                                 return false
                             }
                         }
