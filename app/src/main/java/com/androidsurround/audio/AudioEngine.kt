@@ -1,6 +1,7 @@
 package com.androidsurround.audio
 
 import android.content.Context
+import androidx.media3.common.C
 import com.androidsurround.model.AudioDevice
 import com.androidsurround.model.ChannelLayout
 import com.androidsurround.model.ChannelPosition
@@ -9,6 +10,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class AudioEngine(private val context: Context) {
 
@@ -138,6 +141,61 @@ class AudioEngine(private val context: Context) {
 
     fun pushFrames(frameData: Map<String, FloatArray>) {
         multiSink.pushFrames(frameData)
+    }
+
+    fun onPcmData(buffer: ByteBuffer, channelCount: Int, sampleRate: Int, encoding: Int) {
+        if (!_isActive.value) return
+        val devs = _selectedDevices.value
+        if (devs.isEmpty()) return
+
+        val floats = pcmToFloat(buffer, encoding)
+        if (floats.isEmpty()) return
+
+        val frameData = processAudioFrame(floats, channelCount)
+        multiSink.pushFrames(frameData)
+    }
+
+    private fun pcmToFloat(buffer: ByteBuffer, encoding: Int): FloatArray {
+        val pos = buffer.position()
+        val limit = buffer.limit()
+        val remaining = limit - pos
+        if (remaining <= 0) return FloatArray(0)
+
+        return when (encoding) {
+            C.ENCODING_PCM_FLOAT -> {
+                val fb = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
+                val arr = FloatArray(fb.remaining())
+                fb.get(arr)
+                arr
+            }
+            C.ENCODING_PCM_16BIT -> {
+                val total = remaining / 2
+                val arr = FloatArray(total)
+                val buf = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+                for (i in 0 until total) {
+                    arr[i] = buf.getShort(pos + i * 2).toFloat() / 32768f
+                }
+                arr
+            }
+            C.ENCODING_PCM_32BIT -> {
+                val total = remaining / 4
+                val arr = FloatArray(total)
+                val buf = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+                for (i in 0 until total) {
+                    arr[i] = buf.getInt(pos + i * 4).toFloat() / 2147483648f
+                }
+                arr
+            }
+            C.ENCODING_PCM_8BIT -> {
+                val total = remaining
+                val arr = FloatArray(total)
+                for (i in 0 until total) {
+                    arr[i] = (buffer.get(pos + i).toInt() and 0xFF - 128) / 128f
+                }
+                arr
+            }
+            else -> FloatArray(0)
+        }
     }
 
     fun stopPipeline() {

@@ -112,9 +112,13 @@ class MainActivity : ComponentActivity() {
     private fun toggleEngine() {
         if (audioEngine.isActive.value) {
             audioEngine.stopPipeline()
+            mediaPlayer.setPcmCallback(null)
             mediaPlayer.setVolume(1f)
         } else {
             audioEngine.startPipeline()
+            mediaPlayer.setPcmCallback { buffer, ch, sr, enc ->
+                audioEngine.onPcmData(buffer, ch, sr, enc)
+            }
             mediaPlayer.setVolume(0f)
         }
     }
