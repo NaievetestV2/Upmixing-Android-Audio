@@ -110,8 +110,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toggleEngine() {
-        if (audioEngine.isActive.value) audioEngine.stopPipeline()
-        else audioEngine.startPipeline()
+        if (audioEngine.isActive.value) {
+            audioEngine.stopPipeline()
+            mediaPlayer.setVolume(1f)
+        } else {
+            audioEngine.startPipeline()
+            mediaPlayer.setVolume(0f)
+        }
     }
 
     private fun openFilePicker() {
