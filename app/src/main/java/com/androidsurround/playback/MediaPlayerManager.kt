@@ -7,7 +7,6 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.audio.DefaultAudioSink
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,24 +25,18 @@ data class PlaybackState(
 class MediaPlayerManager(private val context: Context) {
 
     val player: ExoPlayer
-    private var pipelineSink: PipelineAudioSink? = null
-    private var pcmCallback: PcmCallback? = null
+    private val pipelineSink: PipelineAudioSink
 
     init {
-        pipelineSink = null // created on first callback registration
-        player = ExoPlayer.Builder(context).build()
+        pipelineSink = PipelineAudioSink(context)
+        player = ExoPlayer.Builder(context)
+            .setAudioSink(pipelineSink)
+            .build()
     }
 
     fun setPcmCallback(callback: PcmCallback?) {
-        pcmCallback = callback
-        if (callback != null) {
-            val sink = PipelineAudioSink(callback)
-            pipelineSink = sink
-            player.setAudioSink(sink)
-        } else {
-            pipelineSink = null
-            player.setAudioSink(DefaultAudioSink.Builder(context).build())
-        }
+        pipelineSink.onPcmData = callback
+        pipelineSink.captureOnly = callback != null
     }
 
     private val _playbackState = MutableStateFlow(PlaybackState())
