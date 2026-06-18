@@ -8,11 +8,14 @@ import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.*
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.ByteBuffer
 
 class PcmDecoder(private val context: Context) {
 
     private var scope: CoroutineScope? = null
     private var job: Job? = null
+    @Volatile private var running: Boolean = false
 
     var onPcmData: ((FloatArray, Int, Int) -> Unit)? = null
     var onEnded: (() -> Unit)? = null
@@ -20,6 +23,7 @@ class PcmDecoder(private val context: Context) {
 
     fun start(uri: Uri) {
         stop()
+        running = true
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         job = scope?.launch {
             try {
@@ -61,7 +65,7 @@ class PcmDecoder(private val context: Context) {
         var inputDone = false
         var outputDone = false
 
-        while (!outputDone && currentCoroutineContext().isActive) {
+        while (!outputDone && running) {
             if (!inputDone) {
                 val inIdx = codec.dequeueInputBuffer(10000)
                 if (inIdx >= 0) {
@@ -125,6 +129,7 @@ class PcmDecoder(private val context: Context) {
     }
 
     fun stop() {
+        running = false
         job?.cancel()
         scope?.cancel()
         scope = null
