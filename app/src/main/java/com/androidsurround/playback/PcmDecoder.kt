@@ -8,7 +8,6 @@ import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.*
 import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 class PcmDecoder(private val context: Context) {
 
@@ -62,19 +61,19 @@ class PcmDecoder(private val context: Context) {
         var inputDone = false
         var outputDone = false
 
-        while (!outputDone && isActive) {
+        while (!outputDone && currentCoroutineContext().isActive) {
             if (!inputDone) {
                 val inIdx = codec.dequeueInputBuffer(10000)
                 if (inIdx >= 0) {
-                    val inBuf = codec.getInputBuffer(inIdx)
+                    val inBuf = codec.getInputBuffer(inIdx) ?: continue
                     val sampleSize = extractor.readSampleData(inBuf, 0)
                     if (sampleSize < 0) {
                         codec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                         inputDone = true
                     } else {
+                        val pts = extractor.sampleTime
+                        codec.queueInputBuffer(inIdx, 0, sampleSize, pts, 0)
                         extractor.advance()
-                        // Some extractors need advance BEFORE queueInputBuffer timing
-                        codec.queueInputBuffer(inIdx, 0, sampleSize, extractor.sampleTime, 0)
                     }
                 }
             }
