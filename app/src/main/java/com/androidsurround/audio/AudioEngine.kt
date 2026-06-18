@@ -136,8 +136,8 @@ class AudioEngine(private val context: Context) {
         return result
     }
 
-    fun writeFrames(frameData: Map<String, FloatArray>) {
-        multiSink.writeFrames(frameData)
+    fun pushFrames(frameData: Map<String, FloatArray>) {
+        multiSink.pushFrames(frameData)
     }
 
     fun stopPipeline() {

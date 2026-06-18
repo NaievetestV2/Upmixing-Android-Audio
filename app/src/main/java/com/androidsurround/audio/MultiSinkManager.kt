@@ -85,7 +85,8 @@ class MultiSinkManager(private val context: Context) {
         var startedOk = true
         scope?.launch {
             for (a in assignments) {
-                val t = createAudioTrack(a) ?: run { startedOk = false; continue }
+                val t = createAudioTrack(a)
+                if (t == null) { startedOk = false; break }
                 val silentBuf = FloatArray(bufferSize / 4)
                 t.write(silentBuf, 0, silentBuf.size, AudioTrack.WRITE_BLOCKING)
                 t.play()
