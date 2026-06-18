@@ -115,13 +115,15 @@ class MainActivity : ComponentActivity() {
     private fun startDecoder(uri: Uri) {
         pcmDecoder.stop()
         pcmDecoder.onPcmData = { data, ch, sr ->
+            android.util.Log.d("Pipeline", "PCM data: ${data.size} floats, $ch ch, $sr Hz")
             val frameData = audioEngine.processAudioFrame(data, ch)
             audioEngine.pushFrames(frameData)
         }
         pcmDecoder.onEnded = {
-            // optionally restart or signal completion
+            android.util.Log.d("Pipeline", "Decoder ended")
         }
         pcmDecoder.onError = { err ->
+            android.util.Log.e("Pipeline", "Decoder error: $err")
             runOnUiThread {
                 mediaPlayer.setVolume(1f)
             }

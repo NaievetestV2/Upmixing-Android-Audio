@@ -84,12 +84,24 @@ class AudioEngine(private val context: Context) {
         if (devices.isEmpty()) return emptyMap()
 
         val upmixed = upmixProcessor.process(input, inputChannels, layout, config)
-        val frameSize = layout.channelCount
+        val upmixFrameSize = layout.channelCount
+        val totalFrames = upmixed.size / upmixFrameSize
 
         return if (devices.size == 1) {
-            mapOf(devices.first().uniqueId to upmixed)
+            val actualCh = multiSink.actualChannels.value
+            if (actualCh >= upmixFrameSize) {
+                mapOf(devices.first().uniqueId to upmixed)
+            } else {
+                val trimmed = FloatArray(totalFrames * actualCh)
+                for (f in 0 until totalFrames) {
+                    for (c in 0 until actualCh) {
+                        trimmed[f * actualCh + c] = upmixed[f * upmixFrameSize + c]
+                    }
+                }
+                mapOf(devices.first().uniqueId to trimmed)
+            }
         } else {
-            distributeToDevices(upmixed, frameSize, devices, layout)
+            distributeToDevices(upmixed, upmixFrameSize, devices, layout)
         }
     }
 
