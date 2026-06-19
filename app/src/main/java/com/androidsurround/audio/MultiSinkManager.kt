@@ -223,9 +223,9 @@ class MultiSinkManager(private val context: Context) {
                 .build()
             if (deviceInfo != null) {
                 val ok = track.setPreferredDevice(deviceInfo)
-                Log.d("MultiSink", "setPreferredDevice(${deviceInfo.productName}): $ok")
+                                Log.i("MultiSink", "setPreferredDevice(${deviceInfo.productName}): $ok")
             }
-            Log.d("MultiSink", "AudioTrack created: ch=$chCount, mask=$chMask, buf=$bufSize")
+                        Log.i("MultiSink", "AudioTrack created: ch=$chCount, mask=$chMask, buf=$bufSize")
             track
         } catch (e: Exception) {
             Log.e("MultiSink", "Failed to create AudioTrack: ${e.message}")

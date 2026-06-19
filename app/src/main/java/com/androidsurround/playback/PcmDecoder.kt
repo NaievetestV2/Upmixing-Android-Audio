@@ -26,7 +26,7 @@ class PcmDecoder(private val context: Context) {
     fun start(uri: Uri) {
         stop()
         running = true
-        Log.d("PcmDecoder", "Starting decode: $uri")
+        Log.i("PcmDecoder", "Starting decode: $uri")
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         job = scope?.launch {
             try {
@@ -53,7 +53,7 @@ class PcmDecoder(private val context: Context) {
             if (mime?.startsWith("audio/") == true) {
                 audioTrackIdx = i
                 inputFormat = fmt
-                Log.d("PcmDecoder", "Found audio track: mime=$mime ch=${fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)} sr=${fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)}")
+                Log.i("PcmDecoder", "Found audio track: mime=$mime ch=${fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)} sr=${fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)}")
                 break
             }
         }
@@ -98,7 +98,7 @@ class PcmDecoder(private val context: Context) {
                     if (newFmt.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
                         pcmEncoding = newFmt.getInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
                     }
-                    Log.d("PcmDecoder", "Output format: ch=$channelCount sr=$sampleRate enc=$pcmEncoding")
+                    Log.i("PcmDecoder", "Output format: ch=$channelCount sr=$sampleRate enc=$pcmEncoding")
                 }
                 outIdx >= 0 -> {
                     val eos = bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
@@ -123,7 +123,7 @@ class PcmDecoder(private val context: Context) {
             }
         }
 
-        Log.d("PcmDecoder", "Decode loop ended")
+        Log.i("PcmDecoder", "Decode loop ended")
         codec.stop()
         codec.release()
         extractor.release()

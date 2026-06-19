@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -101,6 +102,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun playUri(uri: Uri) {
+        Log.i("Pipeline", "playUri: $uri")
         mediaPlayer.stopPlayback()
         pcmDecoder.stop()
         mediaPlayer.playUri(uri)
@@ -129,22 +131,26 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startDecoder(uri: Uri) {
+        Log.i("Pipeline", "startDecoder: $uri")
         pcmDecoder.stop()
         mediaPlayer.pausePlayback()
         pcmDecoder.onPcmData = { data, ch, sr ->
+            Log.i("Pipeline", "onPcmData: ${data.size} floats, ${ch}ch, ${sr}Hz")
             val frameData = audioEngine.processAudioFrame(data, ch)
             audioEngine.pushFrames(frameData)
         }
         pcmDecoder.onEnded = {
+            Log.i("Pipeline", "Decoder ended naturally")
             runOnUiThread { stopDecoder() }
         }
         pcmDecoder.onError = { err ->
-            android.util.Log.e("Pipeline", "Decoder error: $err")
+            Log.e("Pipeline", "Decoder error: $err")
         }
         pcmDecoder.start(uri)
     }
 
     private fun stopDecoder() {
+        Log.i("Pipeline", "stopDecoder")
         pcmDecoder.stop()
         if (!audioEngine.isActive.value) mediaPlayer.resumePlayback()
     }
@@ -157,14 +163,20 @@ class MainActivity : ComponentActivity() {
 
     private fun toggleEngine() {
         if (audioEngine.isActive.value) {
+            Log.i("Pipeline", "Engine OFF: stopping decoder + pipeline")
             pcmDecoder.stop()
             audioEngine.stopPipeline()
             mediaPlayer.resumePlayback()
         } else {
+            Log.i("Pipeline", "Engine ON: starting pipeline")
             audioEngine.startPipeline()
-            if (!audioEngine.isActive.value) return
+            if (!audioEngine.isActive.value) {
+                Log.w("Pipeline", "Engine failed to start")
+                return
+            }
             val uri = mediaPlayer.currentUri
             mediaPlayer.pausePlayback()
+            Log.i("Pipeline", "currentUri=$uri")
             if (uri != null) startDecoder(uri)
         }
     }

@@ -47,11 +47,11 @@ class UpmixProcessor {
 
             for (ch in outputLayout.channels.indices) {
                 val pos = outputLayout.channels[ch]
-                output[outIdx + ch] = when (config.method) {
+                output[outIdx + ch] = (when (config.method) {
                     UpmixMethod.SIMPLE -> simpleUpmix(l, r, mid, side, pos, config)
                     UpmixMethod.PSD -> psdUpmix(l, r, mid, side, frame, pos, config)
                     UpmixMethod.DOLBY -> dolbyUpmix(l, r, mid, side, pos, config)
-                }
+                }).coerceIn(-1f, 1f)
             }
         }
 

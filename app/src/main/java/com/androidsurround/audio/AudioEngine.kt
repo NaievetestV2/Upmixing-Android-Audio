@@ -1,6 +1,7 @@
 package com.androidsurround.audio
 
 import android.content.Context
+import android.util.Log
 import com.androidsurround.model.AudioDevice
 import com.androidsurround.model.ChannelLayout
 import com.androidsurround.model.ChannelPosition
@@ -66,11 +67,15 @@ class AudioEngine(private val context: Context) {
         stopPipeline()
 
         val devs = _selectedDevices.value
-        if (devs.isEmpty()) return
+        if (devs.isEmpty()) {
+            Log.i("AudioEngine", "startPipeline: no devices selected")
+            return
+        }
 
         reconfigure()
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         _isActive.value = true
+        Log.i("AudioEngine", "Pipeline started with ${devs.size} device(s), layout=${_currentLayout.value}")
     }
 
     fun processAudioFrame(
@@ -81,11 +86,15 @@ class AudioEngine(private val context: Context) {
         val layout = _currentLayout.value
         val config = _upmixConfig.value
 
-        if (devices.isEmpty()) return emptyMap()
+        if (devices.isEmpty()) {
+            Log.w("AudioEngine", "processAudioFrame: no devices")
+            return emptyMap()
+        }
 
         val upmixed = upmixProcessor.process(input, inputChannels, layout, config)
         val upmixFrameSize = layout.channelCount
         val totalFrames = upmixed.size / upmixFrameSize
+        Log.i("AudioEngine", "processAudioFrame: in=${input.size}/${inputChannels}ch upmixed=${upmixed.size} frames=$totalFrames devices=${devices.size}")
 
         return if (devices.size == 1) {
             val actualCh = multiSink.actualChannels.value
@@ -153,6 +162,7 @@ class AudioEngine(private val context: Context) {
     }
 
     fun stopPipeline() {
+        Log.i("AudioEngine", "Stopping pipeline")
         _isActive.value = false
         multiSink.stop()
         scope?.cancel()
