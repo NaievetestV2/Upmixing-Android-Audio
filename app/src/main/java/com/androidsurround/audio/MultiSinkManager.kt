@@ -31,8 +31,8 @@ class MultiSinkManager(private val context: Context) {
     private var sampleRate = 48000
     private var bufferSize = 16384
     private var scope: CoroutineScope? = null
-    private var writeJob: Job? = null
-    private val frameQueue = ConcurrentLinkedQueue<Pair<String, FloatArray>>()
+    private var writeJobs = mutableListOf<Job>()
+    private val perDeviceQueues = mutableMapOf<String, ConcurrentLinkedQueue<FloatArray>>()
     private val trackLock = Any()
 
     data class DeviceChannelAssignment(
@@ -91,12 +91,14 @@ class MultiSinkManager(private val context: Context) {
             for (a in assignments) {
                 val t = createAudioTrack(a)
                 if (t == null) { startedOk = false; break }
-                val silentBuf = FloatArray(bufferSize / 4)
+                val deviceBufSize = computeBufferSize(a.actualChannelCount)
+                val silentBuf = FloatArray(deviceBufSize / 4)
                 t.write(silentBuf, 0, silentBuf.size, AudioTrack.WRITE_BLOCKING)
                 t.play()
                 synchronized(trackLock) {
                     tracks[a.device.uniqueId] = t
                     deviceChCount[a.device.uniqueId] = a.actualChannelCount
+                    perDeviceQueues.getOrPut(a.device.uniqueId) { ConcurrentLinkedQueue() }
                 }
                 totalActualCh += a.actualChannelCount
             }
@@ -104,43 +106,32 @@ class MultiSinkManager(private val context: Context) {
             _actualChannels.value = totalActualCh.coerceAtLeast(2)
             _isRunning.value = true
 
-            writeJob = launch {
-                val tempBuf = FloatArray(4096)
-                while (isActive) {
-                    if (!_isRunning.value) break
-
-                    val batch = mutableListOf<Pair<String, FloatArray>>()
-                    while (true) {
-                        val item = frameQueue.poll() ?: break
-                        batch.add(item)
+            synchronized(trackLock) {
+                for (id in tracks.keys) {
+                    val wJob = launch {
+                        val tempBuf = FloatArray(4096)
+                        val queue = perDeviceQueues[id]!!
+                        val chCount = deviceChCount[id] ?: 2
+                        val track = tracks[id]!!
+                        while (isActive) {
+                            if (!_isRunning.value) break
+                            val data = queue.poll()
+                            if (data == null) { delay(5); continue }
+                            try {
+                                val frameSize = chCount
+                                var written = 0
+                                while (written < data.size) {
+                                    val framesLeft = (data.size - written) / frameSize
+                                    val framesChunk = minOf(framesLeft, tempBuf.size / frameSize)
+                                    val copyLen = framesChunk * frameSize
+                                    System.arraycopy(data, written, tempBuf, 0, copyLen)
+                                    track.write(tempBuf, 0, copyLen, AudioTrack.WRITE_BLOCKING)
+                                    written += copyLen
+                                }
+                            } catch (_: Exception) {}
+                        }
                     }
-                    if (batch.isEmpty()) { delay(5); continue }
-
-                    val trackSnapshot: Map<String, AudioTrack>
-                    val chSnapshot: Map<String, Int>
-                    synchronized(trackLock) {
-                        trackSnapshot = tracks.toMap()
-                        chSnapshot = deviceChCount.toMap()
-                    }
-
-                    for ((id, data) in batch) {
-                        if (!isActive) break
-                        val track = trackSnapshot[id] ?: continue
-                        val chCount = chSnapshot[id] ?: 2
-                        if (data.isEmpty()) continue
-                        try {
-                            val frameSize = chCount
-                            var written = 0
-                            while (written < data.size) {
-                                val framesLeft = (data.size - written) / frameSize
-                                val framesChunk = minOf(framesLeft, tempBuf.size / frameSize)
-                                val byteChunk = framesChunk * frameSize
-                                System.arraycopy(data, written, tempBuf, 0, byteChunk)
-                                track.write(tempBuf, 0, byteChunk, AudioTrack.WRITE_BLOCKING)
-                                written += byteChunk
-                            }
-                        } catch (_: Exception) {}
-                    }
+                    writeJobs.add(wJob)
                 }
             }
         }
@@ -185,21 +176,23 @@ class MultiSinkManager(private val context: Context) {
     fun pushFrames(data: Map<String, FloatArray>) {
         if (!_isRunning.value) return
         for ((id, arr) in data) {
-            frameQueue.add(id to arr)
+            val q = perDeviceQueues[id]
+            if (q != null) q.add(arr)
         }
     }
 
     fun stop() {
         _isRunning.value = false
-        writeJob?.cancel()
+        writeJobs.forEach { it.cancel() }
+        writeJobs.clear()
         synchronized(trackLock) {
             for ((_, t) in tracks) { try { t.stop(); t.release() } catch (_: Exception) {} }
             tracks.clear()
             deviceChCount.clear()
+            for (q in perDeviceQueues.values) { q.clear() }
+            perDeviceQueues.clear()
         }
-        frameQueue.clear()
         scope?.cancel()
         scope = null
-        writeJob = null
     }
 }
