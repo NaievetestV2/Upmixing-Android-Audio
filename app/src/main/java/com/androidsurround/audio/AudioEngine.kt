@@ -73,6 +73,7 @@ class AudioEngine(private val context: Context) {
         }
 
         reconfigure()
+        multiSink.start()
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         _isActive.value = true
         Log.i("AudioEngine", "Pipeline started with ${devs.size} device(s), layout=${_currentLayout.value}")
