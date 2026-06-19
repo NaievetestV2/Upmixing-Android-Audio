@@ -24,6 +24,9 @@ class MultiSinkManager(private val context: Context) {
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
     private var sampleRate = 48000
+    private val exceptionHandler = CoroutineExceptionHandler { _, e ->
+        Log.e("MultiSink", "Uncaught coroutine exception", e)
+    }
     private var scope: CoroutineScope? = null
     private var writeJobs = mutableListOf<Job>()
 
@@ -99,9 +102,8 @@ class MultiSinkManager(private val context: Context) {
     fun start() {
         if (_isRunning.value) return
         stop()
-        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + exceptionHandler)
         var startedOk = true
-        var totalCh = 0
         scope?.launch {
             for (a in assignments) {
                 val eff = a.effectiveCh
@@ -120,6 +122,7 @@ class MultiSinkManager(private val context: Context) {
                             .setChannelMask(mask).build())
                         .setBufferSizeInBytes(bufSize)
                         .setTransferMode(AudioTrack.MODE_STREAM)
+                        .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                         .build()
                 } catch (e: Exception) {
                     Log.e("MultiSink", "Failed to create AudioTrack: ${e.message}")
@@ -133,19 +136,20 @@ class MultiSinkManager(private val context: Context) {
                 }
                 Log.i("MultiSink", "AudioTrack: id=${a.device.uniqueId} eff=$eff/$pch mask=$mask buf=$bufSize")
 
-                val silent = ByteArray(bufSize)
-                var silOff = 0
-                while (silOff < silent.size) {
-                    val ret = track.write(silent, silOff, silent.size - silOff, AudioTrack.WRITE_BLOCKING)
-                    if (ret <= 0) { Log.e("MultiSink", "Silence write error: $ret"); break }
-                    silOff += ret
-                }
                 track.play()
+
+                val fillSize = (bufSize / 4).coerceAtMost(16384)
+                val silent = ByteArray(fillSize)
+                var off = 0
+                while (off < fillSize) {
+                    val ret = track.write(silent, off, fillSize - off, AudioTrack.WRITE_BLOCKING)
+                    if (ret <= 0) break
+                    off += ret
+                }
 
                 synchronized(sinkLock) {
                     sinks[a.device.uniqueId] = SinkInfo(track, ConcurrentLinkedQueue(), eff, pch)
                 }
-                totalCh += eff
             }
             if (!startedOk) { stop(); return@launch }
             _isRunning.value = true
@@ -157,18 +161,22 @@ class MultiSinkManager(private val context: Context) {
                     val tempBuf = ByteArray(32768)
                     while (isActive) {
                         if (!_isRunning.value) break
-                        val data = si.queue.poll()
-                        if (data == null) { delay(5); continue }
-                        var offset = 0
-                        while (offset < data.size) {
-                            val chunk = minOf(data.size - offset, tempBuf.size)
-                            System.arraycopy(data, offset, tempBuf, 0, chunk)
-                            val ret = si.track.write(tempBuf, 0, chunk, AudioTrack.WRITE_BLOCKING)
-                            if (ret <= 0) {
-                                Log.e("MultiSink", "Write error $ret for $id")
-                                break
+                        try {
+                            val data = si.queue.poll()
+                            if (data == null) { delay(5); continue }
+                            var offset = 0
+                            while (offset < data.size) {
+                                val chunk = minOf(data.size - offset, tempBuf.size)
+                                System.arraycopy(data, offset, tempBuf, 0, chunk)
+                                val ret = si.track.write(tempBuf, 0, chunk, AudioTrack.WRITE_BLOCKING)
+                                if (ret <= 0) {
+                                    Log.e("MultiSink", "Write error $ret for $id")
+                                    break
+                                }
+                                offset += ret
                             }
-                            offset += ret
+                        } catch (e: Exception) {
+                            Log.e("MultiSink", "Write exception for $id: ${e.message}")
                         }
                     }
                 }
