@@ -13,6 +13,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.ConcurrentLinkedQueue
 
 class MultiSinkManager(private val context: Context) {
 
@@ -31,8 +32,8 @@ class MultiSinkManager(private val context: Context) {
     private var bufferSize = 16384
     private var scope: CoroutineScope? = null
     private var writeJob: Job? = null
-    private var frameData = mutableMapOf<String, FloatArray>()
-    private val lock = Any()
+    private val frameQueue = ConcurrentLinkedQueue<Pair<String, FloatArray>>()
+    private val trackLock = Any()
 
     data class DeviceChannelAssignment(
         val device: AudioDevice,
@@ -93,7 +94,7 @@ class MultiSinkManager(private val context: Context) {
                 val silentBuf = FloatArray(bufferSize / 4)
                 t.write(silentBuf, 0, silentBuf.size, AudioTrack.WRITE_BLOCKING)
                 t.play()
-                synchronized(lock) {
+                synchronized(trackLock) {
                     tracks[a.device.uniqueId] = t
                     deviceChCount[a.device.uniqueId] = a.actualChannelCount
                 }
@@ -107,39 +108,38 @@ class MultiSinkManager(private val context: Context) {
                 val tempBuf = FloatArray(4096)
                 while (isActive) {
                     if (!_isRunning.value) break
-                    val snapshot: Map<String, FloatArray>
-                    synchronized(lock) {
-                        snapshot = frameData.toMap()
-                        frameData.clear()
-                    }
 
-                    if (snapshot.isEmpty()) { delay(5); continue }
+                    val batch = mutableListOf<Pair<String, FloatArray>>()
+                    while (true) {
+                        val item = frameQueue.poll() ?: break
+                        batch.add(item)
+                    }
+                    if (batch.isEmpty()) { delay(5); continue }
 
                     val trackSnapshot: Map<String, AudioTrack>
                     val chSnapshot: Map<String, Int>
-                    synchronized(lock) {
+                    synchronized(trackLock) {
                         trackSnapshot = tracks.toMap()
                         chSnapshot = deviceChCount.toMap()
                     }
 
-                    for ((id, track) in trackSnapshot) {
+                    for ((id, data) in batch) {
                         if (!isActive) break
+                        val track = trackSnapshot[id] ?: continue
                         val chCount = chSnapshot[id] ?: 2
-                        val data = snapshot[id]
-                        if (data != null && data.isNotEmpty()) {
-                            try {
-                                val frameSize = chCount
-                                var written = 0
-                                while (written < data.size) {
-                                    val framesLeft = (data.size - written) / frameSize
-                                    val framesChunk = minOf(framesLeft, tempBuf.size / frameSize)
-                                    val byteChunk = framesChunk * frameSize
-                                    System.arraycopy(data, written, tempBuf, 0, byteChunk)
-                                    track.write(tempBuf, 0, byteChunk, AudioTrack.WRITE_BLOCKING)
-                                    written += byteChunk
-                                }
-                            } catch (_: Exception) {}
-                        }
+                        if (data.isEmpty()) continue
+                        try {
+                            val frameSize = chCount
+                            var written = 0
+                            while (written < data.size) {
+                                val framesLeft = (data.size - written) / frameSize
+                                val framesChunk = minOf(framesLeft, tempBuf.size / frameSize)
+                                val byteChunk = framesChunk * frameSize
+                                System.arraycopy(data, written, tempBuf, 0, byteChunk)
+                                track.write(tempBuf, 0, byteChunk, AudioTrack.WRITE_BLOCKING)
+                                written += byteChunk
+                            }
+                        } catch (_: Exception) {}
                     }
                 }
             }
@@ -184,22 +184,20 @@ class MultiSinkManager(private val context: Context) {
 
     fun pushFrames(data: Map<String, FloatArray>) {
         if (!_isRunning.value) return
-        synchronized(lock) {
-            for ((id, arr) in data) {
-                frameData[id] = arr
-            }
+        for ((id, arr) in data) {
+            frameQueue.add(id to arr)
         }
     }
 
     fun stop() {
         _isRunning.value = false
         writeJob?.cancel()
-        synchronized(lock) {
+        synchronized(trackLock) {
             for ((_, t) in tracks) { try { t.stop(); t.release() } catch (_: Exception) {} }
             tracks.clear()
             deviceChCount.clear()
-            frameData.clear()
         }
+        frameQueue.clear()
         scope?.cancel()
         scope = null
         writeJob = null
