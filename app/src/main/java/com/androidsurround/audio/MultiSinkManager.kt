@@ -147,7 +147,8 @@ class MultiSinkManager(private val context: Context) {
                     val tempBuf = ByteArray(32768)
                     while (isActive) {
                         if (!_isRunning.value) break
-                        val data = si.queue.poll() ?: run { delay(5); continue }
+                        val data = si.queue.poll()
+                        if (data == null) { delay(5); continue }
                         var offset = 0
                         while (offset < data.size) {
                             val chunk = minOf(data.size - offset, tempBuf.size)
