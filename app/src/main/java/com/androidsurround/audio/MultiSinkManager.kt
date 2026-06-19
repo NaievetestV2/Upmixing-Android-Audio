@@ -23,9 +23,6 @@ class MultiSinkManager(private val context: Context) {
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
-    private val _actualChannels = MutableStateFlow(2)
-    val actualChannels: StateFlow<Int> = _actualChannels.asStateFlow()
-
     private var sampleRate = 48000
     private var scope: CoroutineScope? = null
     private var writeJobs = mutableListOf<Job>()
@@ -33,7 +30,7 @@ class MultiSinkManager(private val context: Context) {
     private data class SinkInfo(
         val track: AudioTrack,
         val queue: ConcurrentLinkedQueue<ByteArray>,
-        val assignedCh: Int,
+        val effectiveCh: Int,
         val paddedCh: Int,
     )
     private val sinks = mutableMapOf<String, SinkInfo>()
@@ -42,24 +39,34 @@ class MultiSinkManager(private val context: Context) {
     data class DeviceChannelAssignment(
         val device: AudioDevice,
         val channels: List<ChannelPosition>,
-        val actualChannelCount: Int,
+        val assignedCh: Int,
+        val effectiveCh: Int,
     )
     private var assignments = listOf<DeviceChannelAssignment>()
 
-    private fun paddedCount(assigned: Int): Int = when {
-        assigned <= 1 -> 1
-        assigned <= 2 -> 2
-        assigned <= 4 -> 4
-        assigned <= 6 -> 6
+    private fun paddedCount(ch: Int): Int = when {
+        ch <= 1 -> 1
+        ch <= 2 -> 2
+        ch <= 4 -> 4
+        ch <= 6 -> 6
         else -> 8
     }
 
-    private fun paddedMask(count: Int): Int = when {
-        count <= 1 -> AudioFormat.CHANNEL_OUT_MONO
-        count <= 2 -> AudioFormat.CHANNEL_OUT_STEREO
-        count <= 4 -> AudioFormat.CHANNEL_OUT_QUAD
-        count <= 6 -> AudioFormat.CHANNEL_OUT_5POINT1
+    private fun paddedMask(ch: Int): Int = when {
+        ch <= 1 -> AudioFormat.CHANNEL_OUT_MONO
+        ch <= 2 -> AudioFormat.CHANNEL_OUT_STEREO
+        ch <= 4 -> AudioFormat.CHANNEL_OUT_QUAD
+        ch <= 6 -> AudioFormat.CHANNEL_OUT_5POINT1
         else -> AudioFormat.CHANNEL_OUT_7POINT1_SURROUND
+    }
+
+    private fun deviceMaxChannels(device: AudioDevice): Int {
+        if (device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) {
+            return 2
+        }
+        val max = device.channelCounts.maxOrNull()
+        if (max != null) return max
+        return 2
     }
 
     private fun bufferSizeBytes(chCount: Int): Int {
@@ -81,7 +88,11 @@ class MultiSinkManager(private val context: Context) {
         sampleRate = rate
         assignments = devices.map { d ->
             val chs = deviceChannels[d.uniqueId] ?: emptyList()
-            DeviceChannelAssignment(d, chs, chs.size)
+            val assigned = chs.size
+            val maxDev = deviceMaxChannels(d)
+            val effective = minOf(assigned, maxDev).coerceAtLeast(1)
+            Log.i("MultiSink", "configure ${d.uniqueId}: assigned=$assigned maxDev=$maxDev effective=$effective")
+            DeviceChannelAssignment(d, chs, assigned, effective)
         }
     }
 
@@ -93,10 +104,10 @@ class MultiSinkManager(private val context: Context) {
         var totalCh = 0
         scope?.launch {
             for (a in assignments) {
-                val ch = a.actualChannelCount
-                val pch = paddedCount(ch)
-                val mask = paddedMask(ch)
-                val bufSize = bufferSizeBytes(ch)
+                val eff = a.effectiveCh
+                val pch = paddedCount(eff)
+                val mask = paddedMask(eff)
+                val bufSize = bufferSizeBytes(eff)
                 val deviceInfo = findDeviceInfo(a.device)
                 val track = try {
                     AudioTrack.Builder()
@@ -120,7 +131,7 @@ class MultiSinkManager(private val context: Context) {
                     val ok = track.setPreferredDevice(deviceInfo)
                     Log.i("MultiSink", "setPreferredDevice(${deviceInfo.productName}): $ok")
                 }
-                Log.i("MultiSink", "AudioTrack: id=${a.device.uniqueId} ch=$ch/$pch mask=$mask buf=$bufSize")
+                Log.i("MultiSink", "AudioTrack: id=${a.device.uniqueId} eff=$eff/$pch mask=$mask buf=$bufSize")
 
                 val silent = ByteArray(bufSize)
                 var silOff = 0
@@ -132,12 +143,11 @@ class MultiSinkManager(private val context: Context) {
                 track.play()
 
                 synchronized(sinkLock) {
-                    sinks[a.device.uniqueId] = SinkInfo(track, ConcurrentLinkedQueue(), ch, pch)
+                    sinks[a.device.uniqueId] = SinkInfo(track, ConcurrentLinkedQueue(), eff, pch)
                 }
-                totalCh += ch
+                totalCh += eff
             }
             if (!startedOk) { stop(); return@launch }
-            _actualChannels.value = totalCh.coerceAtLeast(2)
             _isRunning.value = true
 
             val snap: Map<String, SinkInfo>
@@ -173,18 +183,22 @@ class MultiSinkManager(private val context: Context) {
         synchronized(sinkLock) { snap = sinks.toMap() }
         for ((id, arr) in data) {
             val si = snap[id] ?: continue
-            val frames = arr.size / si.assignedCh
+            val a = assignments.find { it.device.uniqueId == id }
+            val assignedCh = a?.assignedCh ?: si.effectiveCh
+            val frames = arr.size / assignedCh
+            if (frames == 0) continue
             val bytes = ByteArray(frames * si.paddedCh * 2)
             var inPos = 0
             var outPos = 0
             for (f in 0 until frames) {
-                for (c in 0 until si.assignedCh) {
+                for (c in 0 until si.effectiveCh) {
                     val s = (arr[inPos++].coerceIn(-1f, 1f) * 32767f).toInt()
                         .coerceIn(-32768, 32767).toShort()
                     bytes[outPos++] = (s.toInt() and 0xFF).toByte()
                     bytes[outPos++] = ((s.toInt() shr 8) and 0xFF).toByte()
                 }
-                outPos += (si.paddedCh - si.assignedCh) * 2
+                inPos += (assignedCh - si.effectiveCh)
+                outPos += (si.paddedCh - si.effectiveCh) * 2
             }
             si.queue.add(bytes)
         }
