@@ -156,14 +156,14 @@ class MultiSinkManager(private val context: Context) {
                 .setAudioAttributes(AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-                .setAudioFormat(AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-                    .setSampleRate(sampleRate).setChannelMask(chMask).build())
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                        .setSampleRate(sampleRate).setChannelMask(chMask).apply {
+                            if (indexMask != null) setChannelIndexMask(indexMask)
+                        }.build())
                 .setBufferSizeInBytes(bufSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
-            if (indexMask != null) {
-                builder.setChannelIndexMask(indexMask)
-            }
             val track = builder.build()
             if (deviceInfo != null) {
                 val ok = track.setPreferredDevice(deviceInfo)
