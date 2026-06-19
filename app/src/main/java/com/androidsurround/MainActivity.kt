@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
                     val upmixConfig by audioEngine.upmixConfig.collectAsStateWithLifecycle()
                     val availableDevices by deviceManager.availableSinks.collectAsStateWithLifecycle()
                     val selectedDevices by deviceManager.selectedDevices.collectAsStateWithLifecycle()
+                    val deviceChannelMappings by audioEngine.deviceChannelMappings.collectAsStateWithLifecycle()
                     val isEngineActive by audioEngine.isActive.collectAsStateWithLifecycle()
                     val rootStatusState = remember { mutableStateOf(RootShell.RootStatus()) }
                     var rootStatus: RootShell.RootStatus by rootStatusState
@@ -73,6 +74,7 @@ class MainActivity : ComponentActivity() {
                         upmixConfig = upmixConfig,
                         availableDevices = availableDevices,
                         selectedDevices = selectedDevices,
+                        deviceChannelMappings = deviceChannelMappings,
                         isEngineActive = isEngineActive,
                         rootStatus = rootStatus,
                         onTogglePlayPause = { togglePlayPause() },
@@ -84,6 +86,9 @@ class MainActivity : ComponentActivity() {
                         onUpmixConfigChanged = { audioEngine.setUpmixConfig(it) },
                         onDeviceToggle = { toggleDevice(it) },
                         onRefreshDevices = { deviceManager.refreshDevices() },
+                        onDeviceMappingChanged = { deviceId, channels ->
+                            audioEngine.setDeviceChannelMapping(deviceId, channels)
+                        },
                         onToggleEngine = { toggleEngine() },
                     )
 

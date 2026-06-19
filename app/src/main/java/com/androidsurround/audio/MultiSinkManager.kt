@@ -8,7 +8,6 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.util.Log
 import com.androidsurround.model.AudioDevice
-import com.androidsurround.model.ChannelLayout
 import com.androidsurround.model.ChannelPosition
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,7 +42,7 @@ class MultiSinkManager(private val context: Context) {
 
     private var assignments = listOf<DeviceChannelAssignment>()
 
-    private val channelMaskMap = mapOf(
+    private val standardMaskMap = mapOf(
         1 to AudioFormat.CHANNEL_OUT_MONO,
         2 to AudioFormat.CHANNEL_OUT_STEREO,
         4 to AudioFormat.CHANNEL_OUT_QUAD,
@@ -51,77 +50,34 @@ class MultiSinkManager(private val context: Context) {
         8 to AudioFormat.CHANNEL_OUT_7POINT1_SURROUND,
     )
 
+    private fun channelMaskFor(count: Int): Pair<Int, Int?> {
+        val stdMask = standardMaskMap[count]
+        if (stdMask != null) return stdMask to null
+        val nextStd = standardMaskMap.entries
+            .filter { it.key > count }
+            .minByOrNull { it.key }
+        if (nextStd != null) return nextStd.value to ((1 shl count) - 1)
+        return AudioFormat.CHANNEL_OUT_STEREO to null
+    }
+
     fun configure(
         devices: List<AudioDevice>,
-        layout: ChannelLayout,
+        deviceChannels: Map<String, List<ChannelPosition>>,
         rate: Int,
     ) {
         sampleRate = rate
-        assignments = if (devices.size == 1) {
-            val devInfo = findDeviceInfo(devices.first())
-            val maxCh = maxSupportedChannels(devInfo)
-            val actualCh = minOf(layout.channelCount, maxCh)
-            listOf(DeviceChannelAssignment(devices.first(), layout.channels, actualCh))
-        } else {
-            distributeChannels(devices, layout)
+        assignments = devices.map { d ->
+            val chs = deviceChannels[d.uniqueId] ?: emptyList()
+            DeviceChannelAssignment(d, chs, chs.size)
         }
-        bufferSize = assignments.maxOf { computeBufferSize(it.actualChannelCount) }
+        bufferSize = assignments.maxOfOrNull { computeBufferSize(it.actualChannelCount) }
+            ?: 16384
     }
 
     private fun computeBufferSize(channelCount: Int): Int {
-        val chMask = channelMaskMap[channelCount] ?: AudioFormat.CHANNEL_OUT_STEREO
-        val minBuf = AudioTrack.getMinBufferSize(
-            sampleRate, chMask, AudioFormat.ENCODING_PCM_FLOAT
-        )
+        val (mask, _) = channelMaskFor(channelCount)
+        val minBuf = AudioTrack.getMinBufferSize(sampleRate, mask, AudioFormat.ENCODING_PCM_FLOAT)
         return (minBuf * 6).coerceIn(16384, 131072)
-    }
-
-    private fun maxSupportedChannels(info: AudioDeviceInfo?): Int {
-        if (info == null) return 2
-        val masks = info.channelMasks ?: return 2
-        return masks.maxOfOrNull { mask ->
-            when (mask) {
-                AudioFormat.CHANNEL_OUT_7POINT1_SURROUND -> 8
-                AudioFormat.CHANNEL_OUT_5POINT1 -> 6
-                AudioFormat.CHANNEL_OUT_QUAD -> 4
-                AudioFormat.CHANNEL_OUT_STEREO -> 2
-                AudioFormat.CHANNEL_OUT_MONO -> 1
-                else -> 0
-            }
-        }?.coerceAtLeast(2) ?: 2
-    }
-
-    private fun distributeChannels(
-        devices: List<AudioDevice>,
-        layout: ChannelLayout,
-    ): List<DeviceChannelAssignment> {
-        if (devices.isEmpty()) return emptyList()
-        val nonLfe = layout.channels.filter { it != ChannelPosition.LFE }
-        val hasLfe = ChannelPosition.LFE in layout.channels
-        val result = mutableListOf<DeviceChannelAssignment>()
-        var idx = 0
-        for ((i, d) in devices.withIndex()) {
-            val devInfo = findDeviceInfo(d)
-            val maxCh = maxSupportedChannels(devInfo)
-            val cnt = if (i == devices.lastIndex) nonLfe.size - idx
-                     else (nonLfe.size / devices.size).coerceAtLeast(1)
-            val chs = nonLfe.subList(idx, (idx + cnt).coerceAtMost(nonLfe.size))
-            val actualCh = minOf(cnt, maxCh)
-            result.add(DeviceChannelAssignment(d, chs.take(actualCh), actualCh))
-            idx += cnt
-        }
-        if (hasLfe) {
-            val first = result.firstOrNull() ?: return result
-            val devInfo = findDeviceInfo(first.device)
-            val maxCh = maxSupportedChannels(devInfo)
-            if (first.channels.size + 1 <= maxCh) {
-                result[0] = first.copy(
-                    channels = first.channels + ChannelPosition.LFE,
-                    actualChannelCount = first.actualChannelCount + 1,
-                )
-            }
-        }
-        return result
     }
 
     fun start() {
@@ -190,28 +146,13 @@ class MultiSinkManager(private val context: Context) {
         }
     }
 
-    private fun findDeviceMask(device: AudioDeviceInfo?): Int {
-        val chMasks = device?.channelMasks ?: return AudioFormat.CHANNEL_OUT_STEREO
-        val preferred = listOf(
-            AudioFormat.CHANNEL_OUT_7POINT1_SURROUND,
-            AudioFormat.CHANNEL_OUT_5POINT1,
-            AudioFormat.CHANNEL_OUT_QUAD,
-            AudioFormat.CHANNEL_OUT_STEREO,
-            AudioFormat.CHANNEL_OUT_MONO,
-        )
-        for (mask in preferred) {
-            if (mask in chMasks) return mask
-        }
-        return AudioFormat.CHANNEL_OUT_STEREO
-    }
-
     private fun createAudioTrack(assignment: DeviceChannelAssignment): AudioTrack? {
         val deviceInfo = findDeviceInfo(assignment.device)
         val chCount = assignment.actualChannelCount
-        val chMask = channelMaskMap[chCount] ?: AudioFormat.CHANNEL_OUT_STEREO
+        val (chMask, indexMask) = channelMaskFor(chCount)
         val bufSize = computeBufferSize(chCount)
         return try {
-            val track = AudioTrack.Builder()
+            val builder = AudioTrack.Builder()
                 .setAudioAttributes(AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
@@ -220,7 +161,10 @@ class MultiSinkManager(private val context: Context) {
                     .setSampleRate(sampleRate).setChannelMask(chMask).build())
                 .setBufferSizeInBytes(bufSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
+            if (indexMask != null) {
+                builder.setChannelIndexMask(indexMask)
+            }
+            val track = builder.build()
             if (deviceInfo != null) {
                 val ok = track.setPreferredDevice(deviceInfo)
                                 Log.i("MultiSink", "setPreferredDevice(${deviceInfo.productName}): $ok")

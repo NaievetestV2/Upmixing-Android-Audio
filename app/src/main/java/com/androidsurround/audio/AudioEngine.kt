@@ -32,6 +32,9 @@ class AudioEngine(private val context: Context) {
     private val _selectedDevices = MutableStateFlow<List<AudioDevice>>(emptyList())
     val selectedDevices: StateFlow<List<AudioDevice>> = _selectedDevices.asStateFlow()
 
+    private val _deviceChannelMappings = MutableStateFlow<Map<String, List<ChannelPosition>>>(emptyMap())
+    val deviceChannelMappings: StateFlow<Map<String, List<ChannelPosition>>> = _deviceChannelMappings.asStateFlow()
+
     private val _sampleRate = MutableStateFlow(48000)
     val sampleRate: StateFlow<Int> = _sampleRate.asStateFlow()
 
@@ -39,6 +42,7 @@ class AudioEngine(private val context: Context) {
 
     fun setLayout(layout: ChannelLayout) {
         _currentLayout.value = layout
+        rebuildDefaultMappings()
         reconfigure()
     }
 
@@ -49,7 +53,39 @@ class AudioEngine(private val context: Context) {
 
     fun setDevices(devices: List<AudioDevice>) {
         _selectedDevices.value = devices
+        rebuildDefaultMappings()
         reconfigure()
+    }
+
+    fun setDeviceChannelMapping(deviceId: String, channels: List<ChannelPosition>) {
+        val updated = _deviceChannelMappings.value.toMutableMap()
+        updated[deviceId] = channels
+        _deviceChannelMappings.value = updated
+        reconfigure()
+    }
+
+    private fun rebuildDefaultMappings() {
+        val devs = _selectedDevices.value
+        val layout = _currentLayout.value
+        if (devs.isEmpty()) {
+            _deviceChannelMappings.value = emptyMap()
+            return
+        }
+        val validPositions = layout.channels.toSet()
+        val mapping = _deviceChannelMappings.value
+            .filterKeys { id -> devs.any { it.uniqueId == id } }
+            .mapValues { (_, chs) -> chs.filter { it in validPositions } }
+            .toMutableMap()
+        for (d in devs) {
+            if (d.uniqueId !in mapping) {
+                mapping[d.uniqueId] = emptyList()
+            }
+        }
+        val assigned = mapping.values.flatten().toSet()
+        if (assigned.size < layout.channels.size && devs.size == 1) {
+            mapping[devs.first().uniqueId] = layout.channels
+        }
+        _deviceChannelMappings.value = mapping
     }
 
     private fun reconfigure() {
@@ -57,9 +93,10 @@ class AudioEngine(private val context: Context) {
         val layout = _currentLayout.value
         val config = _upmixConfig.value
         val rate = _sampleRate.value
+        val mappings = _deviceChannelMappings.value
 
         upmixProcessor.configure(config, layout, rate)
-        multiSink.configure(devs, layout, rate)
+        multiSink.configure(devs, mappings, rate)
     }
 
     fun startPipeline() {
@@ -86,6 +123,7 @@ class AudioEngine(private val context: Context) {
         val devices = _selectedDevices.value
         val layout = _currentLayout.value
         val config = _upmixConfig.value
+        val mappings = _deviceChannelMappings.value
 
         if (devices.isEmpty()) {
             Log.w("AudioEngine", "processAudioFrame: no devices")
@@ -97,64 +135,23 @@ class AudioEngine(private val context: Context) {
         val totalFrames = upmixed.size / upmixFrameSize
         Log.i("AudioEngine", "processAudioFrame: in=${input.size}/${inputChannels}ch upmixed=${upmixed.size} frames=$totalFrames devices=${devices.size}")
 
-        return if (devices.size == 1) {
-            val actualCh = multiSink.actualChannels.value
-            if (actualCh >= upmixFrameSize) {
-                mapOf(devices.first().uniqueId to upmixed)
-            } else {
-                val trimmed = FloatArray(totalFrames * actualCh)
-                for (f in 0 until totalFrames) {
-                    for (c in 0 until actualCh) {
-                        trimmed[f * actualCh + c] = upmixed[f * upmixFrameSize + c]
-                    }
-                }
-                mapOf(devices.first().uniqueId to trimmed)
-            }
-        } else {
-            distributeToDevices(upmixed, upmixFrameSize, devices, layout)
-        }
-    }
-
-    private fun distributeToDevices(
-        upmixed: FloatArray,
-        frameSize: Int,
-        devices: List<AudioDevice>,
-        layout: ChannelLayout,
-    ): Map<String, FloatArray> {
-        val totalFrames = upmixed.size / frameSize
         val result = mutableMapOf<String, FloatArray>()
-
-        val nonLfeIndices = layout.channels
-            .mapIndexedNotNull { idx, pos -> if (pos != ChannelPosition.LFE) idx else null }
-
-        if (devices.size <= 1) {
-            result[devices.first().uniqueId] = upmixed
-            return result
-        }
-
-        val chsPerDevice = nonLfeIndices.size / devices.size
-        var chOffset = 0
-
-        for ((i, device) in devices.withIndex()) {
-            val isLast = i == devices.lastIndex
-            val end = if (isLast) nonLfeIndices.size else (chOffset + chsPerDevice).coerceAtMost(nonLfeIndices.size)
-            val devChIndices = nonLfeIndices.subList(chOffset, end).toMutableList()
-
-            if (i == 0 && ChannelPosition.LFE in layout.channels) {
-                val lfeIdx = layout.channels.indexOf(ChannelPosition.LFE)
-                devChIndices.add(lfeIdx)
+        for (d in devices) {
+            val chs = mappings[d.uniqueId] ?: emptyList()
+            if (chs.isEmpty()) continue
+            val devChIndices = chs.mapNotNull { pos ->
+                val idx = layout.channels.indexOf(pos)
+                if (idx >= 0) idx else null
             }
-
-            val devOutput = FloatArray(totalFrames * devChIndices.size)
+            if (devChIndices.isEmpty()) continue
+            val devOut = FloatArray(totalFrames * devChIndices.size)
             for (f in 0 until totalFrames) {
                 for ((dc, chIdx) in devChIndices.withIndex()) {
-                    devOutput[f * devChIndices.size + dc] = upmixed[f * frameSize + chIdx]
+                    devOut[f * devChIndices.size + dc] = upmixed[f * upmixFrameSize + chIdx]
                 }
             }
-            result[device.uniqueId] = devOutput
-            chOffset = end
+            result[d.uniqueId] = devOut
         }
-
         return result
     }
 

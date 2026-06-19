@@ -37,13 +37,28 @@ data class ChannelLayout(
             ChannelPosition.FL, ChannelPosition.FR, ChannelPosition.FC,
             ChannelPosition.LFE, ChannelPosition.SL, ChannelPosition.SR
         ))
+        val SURROUND_4_1 = ChannelLayout("4.1", "Surround (4.1)", listOf(
+            ChannelPosition.FL, ChannelPosition.FR, ChannelPosition.RL, ChannelPosition.RR,
+            ChannelPosition.LFE
+        ))
+        val SURROUND_5_0 = ChannelLayout("5.0", "Surround (5.0)", listOf(
+            ChannelPosition.FL, ChannelPosition.FR, ChannelPosition.FC,
+            ChannelPosition.SL, ChannelPosition.SR
+        ))
+        val SURROUND_7_0 = ChannelLayout("7.0", "Surround (7.0)", listOf(
+            ChannelPosition.FL, ChannelPosition.FR, ChannelPosition.FC,
+            ChannelPosition.SL, ChannelPosition.SR,
+            ChannelPosition.RL, ChannelPosition.RR
+        ))
         val SURROUND_7_1 = ChannelLayout("7.1", "Surround (7.1)", listOf(
             ChannelPosition.FL, ChannelPosition.FR, ChannelPosition.FC,
             ChannelPosition.LFE, ChannelPosition.SL, ChannelPosition.SR,
             ChannelPosition.RL, ChannelPosition.RR
         ))
 
-        val ALL = listOf(STEREO, STEREO_LFE, QUAD, SURROUND_5_1, SURROUND_7_1)
+        val ALL = listOf(STEREO, STEREO_LFE, QUAD,
+            SURROUND_4_1, SURROUND_5_0, SURROUND_5_1,
+            SURROUND_7_0, SURROUND_7_1)
 
         fun fromName(name: String): ChannelLayout =
             ALL.find { it.name == name } ?: SURROUND_7_1

@@ -27,6 +27,7 @@ fun MainScreen(
     upmixConfig: UpmixConfig,
     availableDevices: List<AudioDevice>,
     selectedDevices: Map<String, AudioDevice>,
+    deviceChannelMappings: Map<String, List<ChannelPosition>>,
     isEngineActive: Boolean,
     rootStatus: RootStatus,
     onTogglePlayPause: () -> Unit,
@@ -38,11 +39,13 @@ fun MainScreen(
     onUpmixConfigChanged: (UpmixConfig) -> Unit,
     onDeviceToggle: (AudioDevice) -> Unit,
     onRefreshDevices: () -> Unit,
+    onDeviceMappingChanged: (String, List<ChannelPosition>) -> Unit,
     onToggleEngine: () -> Unit,
 ) {
     var showDeviceSheet by remember { mutableStateOf(false) }
     var showChannelDialog by remember { mutableStateOf(false) }
     var showUpmixDialog by remember { mutableStateOf(false) }
+    var showMappingDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -150,7 +153,16 @@ fun MainScreen(
                 DeviceChannelMap(
                     selectedDevices = selectedDevices.values.toList(),
                     layout = currentLayout,
+                    mappings = deviceChannelMappings,
                 )
+                Button(
+                    onClick = { showMappingDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Filled.Link, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Map Channels to Devices")
+                }
             }
         }
     }
@@ -177,29 +189,33 @@ fun MainScreen(
             onDismiss = { showUpmixDialog = false },
         )
     }
+    if (showMappingDialog) {
+        DeviceMappingDialog(
+            devices = selectedDevices.values.toList(),
+            layout = currentLayout,
+            currentMappings = deviceChannelMappings,
+            onMappingChanged = onDeviceMappingChanged,
+            onDismiss = { showMappingDialog = false },
+        )
+    }
 }
 
 @Composable
 private fun DeviceChannelMap(
     selectedDevices: List<AudioDevice>,
     layout: ChannelLayout,
+    mappings: Map<String, List<ChannelPosition>>,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text("Device → Channel Mapping", fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(12.dp))
-            if (selectedDevices.size == 1) {
+            if (selectedDevices.size == 1 && mappings.values.flatten().isEmpty()) {
                 Text("All ${layout.channelCount} channels → ${selectedDevices.first().displayName}",
                     style = MaterialTheme.typography.bodySmall)
             } else {
-                val nonLfe = layout.channels.filter { it != ChannelPosition.LFE }
-                val chsPerDevice = (nonLfe.size / selectedDevices.size).coerceAtLeast(1)
-                selectedDevices.forEachIndexed { idx, device ->
-                    val start = idx * chsPerDevice
-                    val end = if (idx == selectedDevices.lastIndex) nonLfe.size
-                             else (start + chsPerDevice).coerceAtMost(nonLfe.size)
-                    val chs = nonLfe.subList(start, end).toMutableList()
-                    if (idx == 0 && ChannelPosition.LFE in layout.channels) chs.add(ChannelPosition.LFE)
+                selectedDevices.forEach { device ->
+                    val chs = mappings[device.uniqueId] ?: emptyList()
                     Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Surface(shape = RoundedCornerShape(4.dp),
                             color = MaterialTheme.colorScheme.primaryContainer) {
@@ -208,7 +224,13 @@ private fun DeviceChannelMap(
                                 style = MaterialTheme.typography.labelSmall)
                         }
                         Spacer(Modifier.width(8.dp))
-                        Text(chs.joinToString(" ") { it.shortLabel }, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            if (chs.isEmpty()) "not assigned"
+                            else chs.joinToString(" ") { it.shortLabel },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (chs.isEmpty()) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurface,
+                        )
                     }
                 }
             }
