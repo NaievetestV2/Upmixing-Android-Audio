@@ -32,6 +32,7 @@ class PcmDecoder(private val context: Context) {
 
     var outputSurface: Surface? = null
 
+    private var lastSeekPosMs = 0L
     private var playbackStartRealMs = 0L
     private var totalPauseMs = 0L
     private var pauseStartMs = 0L
@@ -44,6 +45,7 @@ class PcmDecoder(private val context: Context) {
         running = true
         paused = false
         seekTargetMs = -1L
+        lastSeekPosMs = 0L
         playbackStartRealMs = 0L
         totalPauseMs = 0L
         Log.i("PcmDecoder", "Starting decode: $uri")
@@ -60,7 +62,7 @@ class PcmDecoder(private val context: Context) {
             while (isActive && running) {
                 if (!paused && playbackStartRealMs > 0) {
                     val elapsed = System.currentTimeMillis() - playbackStartRealMs - totalPauseMs
-                    val pos = elapsed.coerceAtLeast(0)
+                    val pos = (lastSeekPosMs + elapsed).coerceAtLeast(0)
                     val dur = _playbackState.value.durationMs
                     _playbackState.value = _playbackState.value.copy(
                         positionMs = pos.coerceAtMost(dur),
@@ -107,8 +109,11 @@ class PcmDecoder(private val context: Context) {
         extractor.selectTrack(audioTrackIdx)
         if (videoTrackIdx >= 0) extractor.selectTrack(videoTrackIdx)
 
+        val durationUs = audioFormat?.getLong(MediaFormat.KEY_DURATION) ?: 0L
+        val durationMs = durationUs / 1000
+        Log.i("PcmDecoder", "durationUs=$durationUs durationMs=$durationMs video=$videoTrackIdx")
         _playbackState.value = _playbackState.value.copy(
-            durationMs = (audioFormat?.getLong(MediaFormat.KEY_DURATION) ?: 0L) / 1000,
+            durationMs = durationMs,
             hasVideo = videoTrackIdx >= 0,
         )
 
@@ -137,10 +142,15 @@ class PcmDecoder(private val context: Context) {
         while (!audioOutputDone && running) {
             if (paused) { delay(50); continue }
             if (seekTargetMs >= 0) {
+                lastSeekPosMs = seekTargetMs
                 handleSeek(audioCodec, extractor)
                 totalDecodedUs = seekTargetMs * 1000
                 playbackStartRealMs = System.currentTimeMillis()
                 totalPauseMs = 0L
+                audioInputDone = false
+                audioOutputDone = false
+                videoInputDone = videoTrackIdx < 0
+                videoOutputDone = videoTrackIdx < 0
             }
 
             if (!audioInputDone || !videoInputDone) {
