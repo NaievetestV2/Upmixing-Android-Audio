@@ -30,6 +30,7 @@ fun MainScreen(
     deviceChannelMappings: Map<String, List<ChannelPosition>>,
     isEngineActive: Boolean,
     rootStatus: RootStatus,
+    isFullscreen: Boolean = false,
     onTogglePlayPause: () -> Unit,
     onSeek: (Long) -> Unit,
     onOpenUrl: (String) -> Unit,
@@ -42,6 +43,8 @@ fun MainScreen(
     onDeviceMappingChanged: (String, List<ChannelPosition>) -> Unit,
     onToggleEngine: () -> Unit,
     onSurfaceChanged: ((android.view.Surface?) -> Unit)? = null,
+    onToggleFullscreen: (() -> Unit)? = null,
+    onFullscreenSurface: ((android.view.Surface?) -> Unit)? = null,
 ) {
     var showDeviceSheet by remember { mutableStateOf(false) }
     var showChannelDialog by remember { mutableStateOf(false) }
@@ -92,6 +95,7 @@ fun MainScreen(
                 onOpenBrowser = onOpenBrowser,
                 onSurfaceChanged = onSurfaceChanged,
                 hasVideoAvailable = playbackState.hasVideo || isEngineActive,
+                onToggleFullscreen = onToggleFullscreen,
             )
 
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -199,6 +203,16 @@ fun MainScreen(
             currentMappings = deviceChannelMappings,
             onMappingChanged = onDeviceMappingChanged,
             onDismiss = { showMappingDialog = false },
+        )
+    }
+
+    if (isFullscreen && onFullscreenSurface != null) {
+        FullscreenVideoPlayer(
+            playbackState = playbackState,
+            onTogglePlayPause = onTogglePlayPause,
+            onSeek = onSeek,
+            onDismiss = { onToggleFullscreen?.invoke() },
+            onSurfaceChanged = onFullscreenSurface,
         )
     }
 }

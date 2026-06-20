@@ -3,6 +3,7 @@ package com.androidsurround.ui
 import android.view.Surface
 import android.view.SurfaceView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,6 +31,7 @@ fun MediaPlayerBar(
     modifier: Modifier = Modifier,
     onSurfaceChanged: ((Surface?) -> Unit)? = null,
     hasVideoAvailable: Boolean = false,
+    onToggleFullscreen: (() -> Unit)? = null,
 ) {
     var showUrlDialog by remember { mutableStateOf(false) }
 
@@ -72,7 +74,8 @@ fun MediaPlayerBar(
                         .fillMaxWidth()
                         .height(200.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color.Black),
+                        .background(Color.Black)
+                        .clickable { onToggleFullscreen?.invoke() },
                 ) {
                     AndroidView(
                         factory = { ctx ->

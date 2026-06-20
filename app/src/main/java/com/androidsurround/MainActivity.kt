@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.view.Surface as AndroidSurface
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -32,6 +33,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var audioEngine: AudioEngine
     private lateinit var mediaPlayer: MediaPlayerManager
     private val pcmDecoder = PcmDecoder(this)
+    private var isFullscreen = false
+    private var inlineSurface: AndroidSurface? = null
 
     private val openFileLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -77,6 +80,7 @@ class MainActivity : ComponentActivity() {
                         deviceChannelMappings = deviceChannelMappings,
                         isEngineActive = isEngineActive,
                         rootStatus = rootStatus,
+                        isFullscreen = isFullscreen,
                         onTogglePlayPause = { togglePlayPause() },
                         onSeek = { if (isEngineActive) pcmDecoder.seekTo(it) else mediaPlayer.seekTo(it) },
                         onOpenUrl = { url -> playUrl(url) },
@@ -90,7 +94,14 @@ class MainActivity : ComponentActivity() {
                             audioEngine.setDeviceChannelMapping(deviceId, channels)
                         },
                         onToggleEngine = { toggleEngine() },
-                        onSurfaceChanged = { pcmDecoder.outputSurface = it },
+                        onSurfaceChanged = { surface ->
+                            inlineSurface = surface
+                            if (!isFullscreen) pcmDecoder.outputSurface = surface
+                        },
+                        onToggleFullscreen = { toggleFullscreen() },
+                        onFullscreenSurface = { surface ->
+                            if (isFullscreen || surface == null) pcmDecoder.outputSurface = surface
+                        },
                     )
 
                     if (showBrowser) {
@@ -161,6 +172,13 @@ class MainActivity : ComponentActivity() {
         Log.i("Pipeline", "stopDecoder")
         pcmDecoder.stop()
         if (!audioEngine.isActive.value) mediaPlayer.resumePlayback()
+    }
+
+    private fun toggleFullscreen() {
+        isFullscreen = !isFullscreen
+        if (!isFullscreen) {
+            pcmDecoder.outputSurface = inlineSurface
+        }
     }
 
     private fun toggleDevice(device: AudioDevice) {
