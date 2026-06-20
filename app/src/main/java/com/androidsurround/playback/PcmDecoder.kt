@@ -32,13 +32,20 @@ class PcmDecoder(private val context: Context) {
 
     var outputSurface: Surface? = null
 
+    private var playbackStartRealMs = 0L
+    private var totalPauseMs = 0L
+    private var pauseStartMs = 0L
+
     fun isRunning(): Boolean = running
+    fun isPaused(): Boolean = paused
 
     fun start(uri: Uri) {
         stop()
         running = true
         paused = false
         seekTargetMs = -1L
+        playbackStartRealMs = 0L
+        totalPauseMs = 0L
         Log.i("PcmDecoder", "Starting decode: $uri")
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         job = scope?.launch {
@@ -47,6 +54,20 @@ class PcmDecoder(private val context: Context) {
             } catch (e: Exception) {
                 Log.e("PcmDecoder", "Decode failed", e)
                 onError?.invoke(e.message ?: "Decode error")
+            }
+        }
+        scope?.launch {
+            while (isActive && running) {
+                if (!paused && playbackStartRealMs > 0) {
+                    val elapsed = System.currentTimeMillis() - playbackStartRealMs - totalPauseMs
+                    val pos = elapsed.coerceAtLeast(0)
+                    val dur = _playbackState.value.durationMs
+                    _playbackState.value = _playbackState.value.copy(
+                        positionMs = pos.coerceAtMost(dur),
+                        isPlaying = true,
+                    )
+                }
+                delay(250)
             }
         }
     }
@@ -111,10 +132,16 @@ class PcmDecoder(private val context: Context) {
         var audioOutputDone = false
         var videoInputDone = videoTrackIdx < 0
         var videoOutputDone = videoTrackIdx < 0
+        var totalDecodedUs = 0L
 
         while (!audioOutputDone && running) {
             if (paused) { delay(50); continue }
-            if (seekTargetMs >= 0) handleSeek(audioCodec, extractor)
+            if (seekTargetMs >= 0) {
+                handleSeek(audioCodec, extractor)
+                totalDecodedUs = seekTargetMs * 1000
+                playbackStartRealMs = System.currentTimeMillis()
+                totalPauseMs = 0L
+            }
 
             if (!audioInputDone || !videoInputDone) {
                 val inIdx = audioCodec.dequeueInputBuffer(5000)
@@ -171,10 +198,11 @@ class PcmDecoder(private val context: Context) {
                                 onPcmData?.invoke(resampled, channelCount, targetSampleRate)
                             }
                         }
-                        _playbackState.value = _playbackState.value.copy(
-                            positionMs = bufferInfo.presentationTimeUs / 1000,
-                            isPlaying = running && !paused,
-                        )
+                        totalDecodedUs = bufferInfo.presentationTimeUs.coerceAtLeast(totalDecodedUs)
+                        if (playbackStartRealMs == 0L) {
+                            playbackStartRealMs = System.currentTimeMillis()
+                        }
+                        delay(15)
                     }
                     audioCodec.releaseOutputBuffer(outIdx, false)
                 }
@@ -187,22 +215,27 @@ class PcmDecoder(private val context: Context) {
                     val eos = vBufInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     if (eos) videoOutputDone = true
                     videoCodec.releaseOutputBuffer(vOutIdx, vBufInfo.presentationTimeUs <
-                        (bufferInfo.presentationTimeUs + 50000))
+                        (totalDecodedUs + 50000))
                     vOutIdx = videoCodec.dequeueOutputBuffer(vBufInfo, 0)
                 }
             }
         }
 
-        Log.i("PcmDecoder", "Decode loop ended")
+        Log.i("PcmDecoder", "Decode loop ended, draining engine...")
+        if (running && !seekTargetMs.let { it >= 0 }) {
+            val drainStart = System.currentTimeMillis()
+            while (running && (System.currentTimeMillis() - drainStart) < 2000) {
+                delay(100)
+            }
+            _playbackState.value = _playbackState.value.copy(isPlaying = false)
+            onEnded?.invoke()
+        }
+
         audioCodec.stop()
         audioCodec.release()
         videoCodec?.stop()
         videoCodec?.release()
         extractor.release()
-        if (!seekTargetMs.let { it >= 0 }) {
-            _playbackState.value = _playbackState.value.copy(isPlaying = false)
-            onEnded?.invoke()
-        }
     }
 
     private fun handleSeek(codec: MediaCodec, extractor: MediaExtractor) {
@@ -220,15 +253,15 @@ class PcmDecoder(private val context: Context) {
 
     fun pauseDecoder() {
         paused = true
+        pauseStartMs = System.currentTimeMillis()
         _playbackState.value = _playbackState.value.copy(isPlaying = false)
     }
 
     fun resumeDecoder() {
         paused = false
+        totalPauseMs += System.currentTimeMillis() - pauseStartMs
         _playbackState.value = _playbackState.value.copy(isPlaying = true)
     }
-
-    fun isPaused(): Boolean = paused
 
     private fun bufToFloat(buf: ByteBuffer, size: Int): FloatArray {
         buf.order(ByteOrder.LITTLE_ENDIAN)

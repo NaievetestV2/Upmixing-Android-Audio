@@ -91,6 +91,7 @@ fun MainScreen(
                 onOpenFile = onOpenFileAction,
                 onOpenBrowser = onOpenBrowser,
                 onSurfaceChanged = onSurfaceChanged,
+                hasVideoAvailable = playbackState.hasVideo || isEngineActive,
             )
 
             Card(modifier = Modifier.fillMaxWidth()) {

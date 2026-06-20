@@ -13,7 +13,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -30,6 +29,7 @@ fun MediaPlayerBar(
     onOpenBrowser: () -> Unit,
     modifier: Modifier = Modifier,
     onSurfaceChanged: ((Surface?) -> Unit)? = null,
+    hasVideoAvailable: Boolean = false,
 ) {
     var showUrlDialog by remember { mutableStateOf(false) }
 
@@ -65,7 +65,7 @@ fun MediaPlayerBar(
                         else MaterialTheme.colorScheme.onSurface,
             )
 
-            if (state.hasVideo) {
+            if (hasVideoAvailable) {
                 Spacer(Modifier.height(8.dp))
                 Box(
                     modifier = Modifier
@@ -152,7 +152,7 @@ fun MediaPlayerBar(
                 TextButton(
                     onClick = { showUrlDialog = false; onOpenUrl(urlInput) },
                     enabled = urlInput.isNotBlank(),
-                ) { Text("Play") }
+                ) { Text("OK") }
             },
             dismissButton = { TextButton(onClick = { showUrlDialog = false }) { Text("Cancel") } },
         )
