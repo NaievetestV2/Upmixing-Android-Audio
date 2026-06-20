@@ -154,30 +154,65 @@ class PcmDecoder(private val context: Context) {
             }
 
             if (!audioInputDone || !videoInputDone) {
-                val inIdx = audioCodec.dequeueInputBuffer(5000)
-                if (inIdx >= 0) {
-                    val inBuf = audioCodec.getInputBuffer(inIdx) ?: continue
-                    val sampleSize = extractor.readSampleData(inBuf, 0)
-                    if (sampleSize < 0) {
-                        audioCodec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        audioInputDone = true
-                        videoInputDone = true
-                    } else {
-                        val trackIdx = extractor.sampleTrackIndex
-                        val pts = extractor.sampleTime
-                        if (trackIdx == audioTrackIdx) {
-                            audioCodec.queueInputBuffer(inIdx, 0, sampleSize, pts, 0)
-                        } else if (trackIdx == videoTrackIdx && videoCodec != null) {
-                            audioCodec.queueInputBuffer(inIdx, 0, 0, 0, 0)
-                            val vIdx = videoCodec.dequeueInputBuffer(5000)
-                            if (vIdx >= 0) {
-                                val vBuf = videoCodec.getInputBuffer(vIdx)
-                                vBuf?.clear()
-                                extractor.readSampleData(vBuf ?: continue, 0)
-                                videoCodec.queueInputBuffer(vIdx, 0, sampleSize, pts, 0)
+                val trackIdx = extractor.sampleTrackIndex
+                when {
+                    trackIdx == audioTrackIdx && !audioInputDone -> {
+                        val inIdx = try { audioCodec.dequeueInputBuffer(5000) } catch (e: Exception) { -1 }
+                        if (inIdx >= 0) {
+                            val inBuf = audioCodec.getInputBuffer(inIdx) ?: continue
+                            val sampleSize = extractor.readSampleData(inBuf, 0)
+                            if (sampleSize < 0) {
+                                audioCodec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                audioInputDone = true
+                                videoInputDone = true
+                            } else {
+                                audioCodec.queueInputBuffer(inIdx, 0, sampleSize, extractor.sampleTime, 0)
+                                extractor.advance()
                             }
                         }
-                        extractor.advance()
+                    }
+                    trackIdx == videoTrackIdx && videoCodec != null && !videoInputDone -> {
+                        val vIdx = try { videoCodec.dequeueInputBuffer(5000) } catch (e: Exception) { -1 }
+                        if (vIdx >= 0) {
+                            val vBuf = videoCodec.getInputBuffer(vIdx) ?: continue
+                            vBuf.clear()
+                            val sampleSize = extractor.readSampleData(vBuf, 0)
+                            if (sampleSize < 0) {
+                                videoCodec.queueInputBuffer(vIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                videoInputDone = true
+                            } else {
+                                videoCodec.queueInputBuffer(vIdx, 0, sampleSize, extractor.sampleTime, 0)
+                                extractor.advance()
+                            }
+                        }
+                    }
+                    trackIdx < 0 -> {
+                        val tempBuf = ByteBuffer.allocate(65536)
+                        val sampleSize = extractor.readSampleData(tempBuf, 0)
+                        if (sampleSize >= 0) {
+                            val actualTrack = extractor.sampleTrackIndex
+                            if (actualTrack == audioTrackIdx && !audioInputDone) {
+                                val inIdx = try { audioCodec.dequeueInputBuffer(5000) } catch (e: Exception) { -1 }
+                                if (inIdx >= 0) {
+                                    val inBuf = audioCodec.getInputBuffer(inIdx) ?: continue
+                                    inBuf.clear()
+                                    inBuf.put(tempBuf.array(), 0, sampleSize)
+                                    audioCodec.queueInputBuffer(inIdx, 0, sampleSize, extractor.sampleTime, 0)
+                                }
+                            } else if (actualTrack == videoTrackIdx && videoCodec != null && !videoInputDone) {
+                                val vIdx = try { videoCodec.dequeueInputBuffer(5000) } catch (e: Exception) { -1 }
+                                if (vIdx >= 0) {
+                                    val vBuf = videoCodec.getInputBuffer(vIdx) ?: continue
+                                    vBuf.clear()
+                                    vBuf.put(tempBuf.array(), 0, sampleSize)
+                                    videoCodec.queueInputBuffer(vIdx, 0, sampleSize, extractor.sampleTime, 0)
+                                }
+                            }
+                            extractor.advance()
+                        } else {
+                            audioInputDone = true
+                            videoInputDone = true
+                        }
                     }
                 }
             }
@@ -193,7 +228,10 @@ class PcmDecoder(private val context: Context) {
                 }
                 outIdx >= 0 -> {
                     val eos = bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-                    if (eos) audioOutputDone = true
+                    if (eos) {
+                        audioOutputDone = true
+                        Log.i("PcmDecoder", "Audio EOS at totalDecodedUs=$totalDecodedUs")
+                    }
 
                     if (bufferInfo.size > 0) {
                         val outBuf = audioCodec.getOutputBuffer(outIdx)
