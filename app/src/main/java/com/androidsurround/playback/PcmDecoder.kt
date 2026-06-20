@@ -54,7 +54,7 @@ class PcmDecoder(private val context: Context) {
     private var pcmEncoding = AudioFormat.ENCODING_PCM_16BIT
     private val targetSampleRate = 48000
 
-    private fun decode(uri: Uri) {
+    private suspend fun decode(uri: Uri) {
         val extractor = MediaExtractor()
         extractor.setDataSource(context, uri, null)
 
