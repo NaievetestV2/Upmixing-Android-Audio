@@ -21,13 +21,39 @@ android {
         }
     }
 
+    val keystorePath = System.getenv("KEYSTORE_PATH")
+    val keystorePass = System.getenv("KEYSTORE_PASSWORD")
+    val keyAlias = System.getenv("KEY_ALIAS")
+    val keyPass = System.getenv("KEY_PASSWORD")
+
+    if (keystorePath != null && keystorePass != null && keyAlias != null) {
+        signingConfigs {
+            create("ci") {
+                storeFile = file(keystorePath)
+                storePassword = keystorePass
+                keyAlias = keyAlias
+                keyPassword = keyPass ?: keystorePass
+            }
+        }
+    } else {
+        signingConfigs {
+            create("ci") {
+                // Use default debug keystore for local builds
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("ci")
+        }
         release {
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("ci")
         }
     }
 

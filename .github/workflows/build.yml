@@ -42,14 +42,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Generate debug keystore
+      - name: Decode signing keystore
         run: |
-          mkdir -p ~/.android
-          if [ ! -f ~/.android/debug.keystore ]; then
+          if [ -n "${{ secrets.KEYSTORE_B64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > /tmp/android.keystore
+            echo "KEYSTORE_PATH=/tmp/android.keystore" >> $GITHUB_ENV
+            echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
+            echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_ENV
+          else
+            # Fallback: generate default debug keystore
+            mkdir -p ~/.android
             keytool -genkey -v -keystore ~/.android/debug.keystore \
               -storepass android -alias androiddebugkey -keypass android \
               -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
+              -dname "CN=Android Debug,O=Android,C=US" 2>&1 || true
+            echo "KEYSTORE_PATH=$HOME/.android/debug.keystore" >> $GITHUB_ENV
+            echo "KEYSTORE_PASSWORD=android" >> $GITHUB_ENV
+            echo "KEY_ALIAS=androiddebugkey" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
           fi
 
       - name: Grant execute permission
@@ -57,10 +68,20 @@ jobs:
 
       - name: Build debug APK
         run: ./gradlew assembleDebug
+        env:
+          KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
+          KEYSTORE_PASSWORD: ${{ env.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ env.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ env.KEY_PASSWORD }}
 
       - name: Build release APK
         run: ./gradlew assembleRelease
         continue-on-error: true
+        env:
+          KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
+          KEYSTORE_PASSWORD: ${{ env.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ env.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ env.KEY_PASSWORD }}
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
