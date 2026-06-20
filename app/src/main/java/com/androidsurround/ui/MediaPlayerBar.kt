@@ -1,6 +1,7 @@
 package com.androidsurround.ui
 
-import android.view.SurfaceHolder
+import android.view.Surface
+import android.view.SurfaceView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -12,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -27,6 +29,7 @@ fun MediaPlayerBar(
     onOpenFile: () -> Unit,
     onOpenBrowser: () -> Unit,
     modifier: Modifier = Modifier,
+    onSurfaceChanged: ((Surface?) -> Unit)? = null,
 ) {
     var showUrlDialog by remember { mutableStateOf(false) }
 
@@ -70,7 +73,27 @@ fun MediaPlayerBar(
                         .height(200.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(Color.Black),
-                )
+                ) {
+                    AndroidView(
+                        factory = { ctx ->
+                            SurfaceView(ctx).also { sv ->
+                                sv.holder.addCallback(object : android.view.SurfaceHolder.Callback {
+                                    override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                                        onSurfaceChanged?.invoke(holder.surface)
+                                    }
+                                    override fun surfaceChanged(
+                                        holder: android.view.SurfaceHolder,
+                                        format: Int, w: Int, h: Int,
+                                    ) {}
+                                    override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
+                                        onSurfaceChanged?.invoke(null)
+                                    }
+                                })
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
 
             Spacer(Modifier.height(8.dp))
@@ -117,7 +140,7 @@ fun MediaPlayerBar(
         var urlInput by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showUrlDialog = false },
-            title = { Text("Stream Audio URL") },
+            title = { Text("Stream URL") },
             text = {
                 OutlinedTextField(
                     value = urlInput, onValueChange = { urlInput = it },

@@ -54,6 +54,7 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background,
                 ) {
                     val playbackState by mediaPlayer.playbackState.collectAsStateWithLifecycle()
+                    val decoderState by pcmDecoder.playbackState.collectAsStateWithLifecycle()
                     val currentLayout by audioEngine.currentLayout.collectAsStateWithLifecycle()
                     val upmixConfig by audioEngine.upmixConfig.collectAsStateWithLifecycle()
                     val availableDevices by deviceManager.availableSinks.collectAsStateWithLifecycle()
@@ -63,13 +64,12 @@ class MainActivity : ComponentActivity() {
                     val rootStatusState = remember { mutableStateOf(RootShell.RootStatus()) }
                     var rootStatus: RootShell.RootStatus by rootStatusState
                     var showBrowser by remember { mutableStateOf(false) }
-
                     LaunchedEffect(Unit) {
                         rootStatus = RootShell.checkRoot()
                     }
 
                     MainScreen(
-                        playbackState = playbackState,
+                        playbackState = if (isEngineActive) decoderState else playbackState,
                         currentLayout = currentLayout,
                         upmixConfig = upmixConfig,
                         availableDevices = availableDevices,
@@ -78,7 +78,7 @@ class MainActivity : ComponentActivity() {
                         isEngineActive = isEngineActive,
                         rootStatus = rootStatus,
                         onTogglePlayPause = { togglePlayPause() },
-                        onSeek = { mediaPlayer.seekTo(it) },
+                        onSeek = { if (isEngineActive) pcmDecoder.seekTo(it) else mediaPlayer.seekTo(it) },
                         onOpenUrl = { url -> playUrl(url) },
                         onOpenFileAction = { openFilePicker() },
                         onOpenBrowser = { showBrowser = true },
@@ -90,6 +90,7 @@ class MainActivity : ComponentActivity() {
                             audioEngine.setDeviceChannelMapping(deviceId, channels)
                         },
                         onToggleEngine = { toggleEngine() },
+                        onSurfaceChanged = { pcmDecoder.outputSurface = it },
                     )
 
                     if (showBrowser) {
@@ -124,8 +125,11 @@ class MainActivity : ComponentActivity() {
     private fun togglePlayPause() {
         if (audioEngine.isActive.value) {
             if (pcmDecoder.isRunning()) {
-                stopDecoder()
-                mediaPlayer.pausePlayback()
+                if (pcmDecoder.isPaused()) {
+                    pcmDecoder.resumeDecoder()
+                } else {
+                    pcmDecoder.pauseDecoder()
+                }
             } else {
                 val uri = mediaPlayer.currentUri
                 if (uri != null) startDecoder(uri)
@@ -140,7 +144,6 @@ class MainActivity : ComponentActivity() {
         pcmDecoder.stop()
         mediaPlayer.pausePlayback()
         pcmDecoder.onPcmData = { data, ch, sr ->
-            Log.i("Pipeline", "onPcmData: ${data.size} floats, ${ch}ch, ${sr}Hz")
             val frameData = audioEngine.processAudioFrame(data, ch)
             audioEngine.pushFrames(frameData)
         }

@@ -7,7 +7,11 @@ import android.media.AudioFormat
 import android.media.MediaFormat
 import android.net.Uri
 import android.util.Log
+import android.view.Surface
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -16,16 +20,25 @@ class PcmDecoder(private val context: Context) {
     private var scope: CoroutineScope? = null
     private var job: Job? = null
     @Volatile private var running: Boolean = false
+    @Volatile private var paused: Boolean = false
+    @Volatile private var seekTargetMs: Long = -1L
+
+    private val _playbackState = MutableStateFlow(PlaybackState())
+    val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
 
     var onPcmData: ((FloatArray, Int, Int) -> Unit)? = null
     var onEnded: (() -> Unit)? = null
     var onError: ((String) -> Unit)? = null
+
+    var outputSurface: Surface? = null
 
     fun isRunning(): Boolean = running
 
     fun start(uri: Uri) {
         stop()
         running = true
+        paused = false
+        seekTargetMs = -1L
         Log.i("PcmDecoder", "Starting decode: $uri")
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         job = scope?.launch {
@@ -46,66 +59,107 @@ class PcmDecoder(private val context: Context) {
         extractor.setDataSource(context, uri, null)
 
         var audioTrackIdx = -1
-        var inputFormat: MediaFormat? = null
+        var videoTrackIdx = -1
+        var videoCodec: MediaCodec? = null
+        var audioFormat: MediaFormat? = null
+        var videoFormat: MediaFormat? = null
+
         for (i in 0 until extractor.trackCount) {
             val fmt = extractor.getTrackFormat(i)
-            val mime = fmt.getString(MediaFormat.KEY_MIME)
-            if (mime?.startsWith("audio/") == true) {
-                audioTrackIdx = i
-                inputFormat = fmt
-                Log.i("PcmDecoder", "Found audio track: mime=$mime ch=${fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)} sr=${fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)}")
-                break
+            val mime = fmt.getString(MediaFormat.KEY_MIME) ?: continue
+            when {
+                mime.startsWith("audio/") && audioTrackIdx < 0 -> {
+                    audioTrackIdx = i
+                    audioFormat = fmt
+                    Log.i("PcmDecoder", "Audio track: mime=$mime ch=${fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)} sr=${fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)}")
+                }
+                mime.startsWith("video/") && videoTrackIdx < 0 -> {
+                    videoTrackIdx = i
+                    videoFormat = fmt
+                    Log.i("PcmDecoder", "Video track: mime=$mime w=${fmt.getInteger(MediaFormat.KEY_WIDTH, 0)} h=${fmt.getInteger(MediaFormat.KEY_HEIGHT, 0)}")
+                }
             }
         }
-        if (audioTrackIdx < 0) { extractor.release(); throw Exception("No audio track found") }
-        extractor.selectTrack(audioTrackIdx)
 
-        val mime = inputFormat!!.getString(MediaFormat.KEY_MIME)!!
-        val channelCount = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT, 2)
-        val sampleRate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE, 48000)
+        if (audioTrackIdx < 0) { extractor.release(); throw Exception("No audio track found") }
+
+        extractor.selectTrack(audioTrackIdx)
+        if (videoTrackIdx >= 0) extractor.selectTrack(videoTrackIdx)
+
+        _playbackState.value = _playbackState.value.copy(
+            durationMs = (audioFormat?.getLong(MediaFormat.KEY_DURATION) ?: 0L) / 1000,
+            hasVideo = videoTrackIdx >= 0,
+        )
+
+        val mime = audioFormat!!.getString(MediaFormat.KEY_MIME)!!
+        val channelCount = audioFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT, 2)
+        val sampleRate = audioFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE, 48000)
         pcmEncoding = AudioFormat.ENCODING_PCM_16BIT
 
-        val codec = MediaCodec.createDecoderByType(mime)
-        codec.configure(inputFormat, null, null, 0)
-        codec.start()
+        val audioCodec = MediaCodec.createDecoderByType(mime)
+        audioCodec.configure(audioFormat, null, null, 0)
+        audioCodec.start()
+
+        if (videoTrackIdx >= 0 && outputSurface != null) {
+            videoCodec = MediaCodec.createDecoderByType(videoFormat!!.getString(MediaFormat.KEY_MIME)!!)
+            videoCodec.configure(videoFormat, outputSurface, null, 0)
+            videoCodec.start()
+        }
 
         val bufferInfo = MediaCodec.BufferInfo()
-        var inputDone = false
-        var outputDone = false
+        var audioInputDone = false
+        var audioOutputDone = false
+        var videoInputDone = videoTrackIdx < 0
+        var videoOutputDone = videoTrackIdx < 0
 
-        while (!outputDone && running) {
-            if (!inputDone) {
-                val inIdx = codec.dequeueInputBuffer(10000)
+        while (!audioOutputDone && running) {
+            if (paused) { delay(50); continue }
+            if (seekTargetMs >= 0) handleSeek(audioCodec, extractor)
+
+            if (!audioInputDone || !videoInputDone) {
+                val inIdx = audioCodec.dequeueInputBuffer(5000)
                 if (inIdx >= 0) {
-                    val inBuf = codec.getInputBuffer(inIdx) ?: continue
+                    val inBuf = audioCodec.getInputBuffer(inIdx) ?: continue
                     val sampleSize = extractor.readSampleData(inBuf, 0)
                     if (sampleSize < 0) {
-                        codec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        inputDone = true
+                        audioCodec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        audioInputDone = true
+                        videoInputDone = true
                     } else {
+                        val trackIdx = extractor.sampleTrackIndex
                         val pts = extractor.sampleTime
-                        codec.queueInputBuffer(inIdx, 0, sampleSize, pts, 0)
+                        if (trackIdx == audioTrackIdx) {
+                            audioCodec.queueInputBuffer(inIdx, 0, sampleSize, pts, 0)
+                        } else if (trackIdx == videoTrackIdx && videoCodec != null) {
+                            audioCodec.queueInputBuffer(inIdx, 0, 0, 0, 0)
+                            val vIdx = videoCodec.dequeueInputBuffer(5000)
+                            if (vIdx >= 0) {
+                                val vBuf = videoCodec.getInputBuffer(vIdx)
+                                vBuf?.clear()
+                                extractor.readSampleData(vBuf ?: continue, 0)
+                                videoCodec.queueInputBuffer(vIdx, 0, sampleSize, pts, 0)
+                            }
+                        }
                         extractor.advance()
                     }
                 }
             }
 
-            val outIdx = codec.dequeueOutputBuffer(bufferInfo, 10000)
+            val outIdx = audioCodec.dequeueOutputBuffer(bufferInfo, 5000)
             when {
-                outIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> { }
+                outIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> {}
                 outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    val newFmt = codec.outputFormat
+                    val newFmt = audioCodec.outputFormat
                     if (newFmt.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
                         pcmEncoding = newFmt.getInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
                     }
-                    Log.i("PcmDecoder", "Output format: ch=$channelCount sr=$sampleRate enc=$pcmEncoding")
                 }
                 outIdx >= 0 -> {
                     val eos = bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-                    if (eos) outputDone = true
+                    if (eos) audioOutputDone = true
 
                     if (bufferInfo.size > 0) {
-                        val outBuf = codec.getOutputBuffer(outIdx)
+                        val outBuf = audioCodec.getOutputBuffer(outIdx)
                         if (outBuf != null) {
                             outBuf.position(bufferInfo.offset)
                             outBuf.limit(bufferInfo.offset + bufferInfo.size)
@@ -117,18 +171,64 @@ class PcmDecoder(private val context: Context) {
                                 onPcmData?.invoke(resampled, channelCount, targetSampleRate)
                             }
                         }
+                        _playbackState.value = _playbackState.value.copy(
+                            positionMs = bufferInfo.presentationTimeUs / 1000,
+                            isPlaying = running && !paused,
+                        )
                     }
-                    codec.releaseOutputBuffer(outIdx, false)
+                    audioCodec.releaseOutputBuffer(outIdx, false)
+                }
+            }
+
+            if (videoCodec != null) {
+                val vBufInfo = MediaCodec.BufferInfo()
+                var vOutIdx = videoCodec.dequeueOutputBuffer(vBufInfo, 0)
+                while (vOutIdx >= 0) {
+                    val eos = vBufInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                    if (eos) videoOutputDone = true
+                    videoCodec.releaseOutputBuffer(vOutIdx, vBufInfo.presentationTimeUs <
+                        (bufferInfo.presentationTimeUs + 50000))
+                    vOutIdx = videoCodec.dequeueOutputBuffer(vBufInfo, 0)
                 }
             }
         }
 
         Log.i("PcmDecoder", "Decode loop ended")
-        codec.stop()
-        codec.release()
+        audioCodec.stop()
+        audioCodec.release()
+        videoCodec?.stop()
+        videoCodec?.release()
         extractor.release()
-        onEnded?.invoke()
+        if (!seekTargetMs.let { it >= 0 }) {
+            _playbackState.value = _playbackState.value.copy(isPlaying = false)
+            onEnded?.invoke()
+        }
     }
+
+    private fun handleSeek(codec: MediaCodec, extractor: MediaExtractor) {
+        val targetUs = seekTargetMs * 1000
+        seekTargetMs = -1L
+        extractor.seekTo(targetUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+        codec.flush()
+        Log.i("PcmDecoder", "Seek done to ${targetUs / 1000}ms")
+    }
+
+    fun seekTo(positionMs: Long) {
+        if (!running) return
+        seekTargetMs = positionMs
+    }
+
+    fun pauseDecoder() {
+        paused = true
+        _playbackState.value = _playbackState.value.copy(isPlaying = false)
+    }
+
+    fun resumeDecoder() {
+        paused = false
+        _playbackState.value = _playbackState.value.copy(isPlaying = true)
+    }
+
+    fun isPaused(): Boolean = paused
 
     private fun bufToFloat(buf: ByteBuffer, size: Int): FloatArray {
         buf.order(ByteOrder.LITTLE_ENDIAN)
@@ -199,9 +299,11 @@ class PcmDecoder(private val context: Context) {
 
     fun stop() {
         running = false
+        paused = false
         job?.cancel()
         scope?.cancel()
         scope = null
         job = null
+        _playbackState.value = PlaybackState()
     }
 }

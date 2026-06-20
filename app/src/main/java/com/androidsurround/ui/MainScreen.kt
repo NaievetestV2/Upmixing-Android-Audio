@@ -41,6 +41,7 @@ fun MainScreen(
     onRefreshDevices: () -> Unit,
     onDeviceMappingChanged: (String, List<ChannelPosition>) -> Unit,
     onToggleEngine: () -> Unit,
+    onSurfaceChanged: ((android.view.Surface?) -> Unit)? = null,
 ) {
     var showDeviceSheet by remember { mutableStateOf(false) }
     var showChannelDialog by remember { mutableStateOf(false) }
@@ -89,6 +90,7 @@ fun MainScreen(
                 onOpenUrl = onOpenUrl,
                 onOpenFile = onOpenFileAction,
                 onOpenBrowser = onOpenBrowser,
+                onSurfaceChanged = onSurfaceChanged,
             )
 
             Card(modifier = Modifier.fillMaxWidth()) {
