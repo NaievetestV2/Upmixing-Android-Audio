@@ -34,6 +34,10 @@ fun PlaylistSheet(
     onCycleRepeat: () -> Unit,
     onPlayItem: (Int) -> Unit,
     onAddCurrentToPlaylist: (String) -> Unit,
+    onSaveQueueAsPlaylist: (String) -> Unit,
+    onAddFilesToPlaylist: (String) -> Unit,
+    onClearQueue: () -> Unit = {},
+    onRemoveQueueItem: (Int) -> Unit = {},
 ) {
     var tab by remember { mutableStateOf(0) }
 
@@ -75,6 +79,9 @@ fun PlaylistSheet(
                     items = queueItems,
                     currentIndex = currentIndex,
                     onPlayItem = onPlayItem,
+                    onSaveAsPlaylist = onSaveQueueAsPlaylist,
+                    onClearQueue = onClearQueue,
+                    onRemoveItem = onRemoveQueueItem,
                 )
                 1 -> PlaylistsTab(
                     playlists = playlists,
@@ -83,6 +90,7 @@ fun PlaylistSheet(
                     onDeletePlaylist = onDeletePlaylist,
                     onLoadPlaylist = onLoadPlaylist,
                     onAddCurrentToPlaylist = onAddCurrentToPlaylist,
+                    onAddFilesToPlaylist = onAddFilesToPlaylist,
                 )
             }
 
@@ -96,16 +104,67 @@ private fun QueueTab(
     items: List<PlaylistItem>,
     currentIndex: Int,
     onPlayItem: (Int) -> Unit,
+    onSaveAsPlaylist: (String) -> Unit,
+    onClearQueue: () -> Unit = {},
+    onRemoveItem: (Int) -> Unit = {},
 ) {
+    var showSaveDialog by remember { mutableStateOf(false) }
+    var saveName by remember { mutableStateOf("") }
+
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text("${items.size} item(s)", style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (items.isNotEmpty()) {
+            Row {
+                TextButton(onClick = onClearQueue) {
+                    Icon(Icons.Filled.ClearAll, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Clear", style = MaterialTheme.typography.labelSmall)
+                }
+                TextButton(onClick = { showSaveDialog = true }) {
+                    Icon(Icons.Filled.Save, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Save", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+
+    if (showSaveDialog) {
+        AlertDialog(
+            onDismissRequest = { showSaveDialog = false },
+            title = { Text("Save Queue as Playlist") },
+            text = {
+                OutlinedTextField(
+                    value = saveName,
+                    onValueChange = { saveName = it },
+                    label = { Text("Playlist name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (saveName.isNotBlank()) {
+                        onSaveAsPlaylist(saveName.trim())
+                        saveName = ""
+                        showSaveDialog = false
+                    }
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { showSaveDialog = false }) { Text("Cancel") } },
+        )
+    }
+
     if (items.isEmpty()) {
-        Text("Queue is empty", style = MaterialTheme.typography.bodyMedium,
+        Text("Queue is empty\nOpen files or URLs to build a queue",
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(16.dp))
         return
     }
-    Text("${items.size} item(s)", style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Spacer(Modifier.height(8.dp))
+
+    Spacer(Modifier.height(4.dp))
     LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
         items(items.withIndex().toList()) { (idx, item) ->
             val isCurrent = idx == currentIndex
@@ -119,9 +178,18 @@ private fun QueueTab(
                         tint = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 },
-                trailingContent = if (isCurrent) {
-                    { Icon(Icons.Filled.PlayArrow, "Now playing", tint = MaterialTheme.colorScheme.primary) }
-                } else null,
+                trailingContent = {
+                    Row {
+                        if (isCurrent) {
+                            Icon(Icons.Filled.PlayArrow, "Now playing", tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(end = 8.dp))
+                        }
+                        IconButton(onClick = { onRemoveItem(idx) }) {
+                            Icon(Icons.Filled.Close, "Remove", modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                },
                 modifier = Modifier.clickable { onPlayItem(idx) },
             )
             if (idx < items.size - 1) Divider()
@@ -137,6 +205,7 @@ private fun PlaylistsTab(
     onDeletePlaylist: (String) -> Unit,
     onLoadPlaylist: (String) -> Unit,
     onAddCurrentToPlaylist: (String) -> Unit,
+    onAddFilesToPlaylist: (String) -> Unit,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
@@ -179,7 +248,8 @@ private fun PlaylistsTab(
     }
 
     if (playlists.isEmpty()) {
-        Text("No playlists yet", style = MaterialTheme.typography.bodyMedium,
+        Text("No playlists yet\nCreate one and add files to it",
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(16.dp))
         return
@@ -205,6 +275,14 @@ private fun PlaylistsTab(
                                 Icon(Icons.Filled.MoreVert, "More")
                             }
                             DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Add files to playlist") },
+                                    leadingIcon = { Icon(Icons.Filled.AddCircle, null) },
+                                    onClick = {
+                                        showMenu = false
+                                        onAddFilesToPlaylist(pl.id)
+                                    },
+                                )
                                 DropdownMenuItem(
                                     text = { Text("Add current to playlist") },
                                     leadingIcon = { Icon(Icons.Filled.Add, null) },
@@ -236,7 +314,7 @@ private fun PlaylistsTab(
                 },
                 modifier = Modifier.clickable { onLoadPlaylist(pl.id) },
             )
-                    if (showRename) {
+            if (showRename) {
                 AlertDialog(
                     onDismissRequest = { showRename = false },
                     title = { Text("Rename Playlist") },

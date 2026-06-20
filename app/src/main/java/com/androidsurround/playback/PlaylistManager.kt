@@ -94,6 +94,24 @@ class PlaylistManager(private val context: Context) {
         saveQueue()
     }
 
+    fun appendToQueue(items: List<PlaylistItem>) {
+        val current = _queueItems.value
+        _queueItems.value = current + items
+        if (_currentIndex.value < 0 && items.isNotEmpty()) _currentIndex.value = current.size
+        saveQueue()
+    }
+
+    fun saveQueueAsPlaylist(name: String) {
+        val items = _queueItems.value
+        if (items.isEmpty()) return
+        val pl = Playlist(
+            name = name,
+            items = items,
+        )
+        _playlists.value = _playlists.value + pl
+        savePlaylists()
+    }
+
     fun loadPlaylistIntoQueue(playlistId: String) {
         val pl = _playlists.value.find { it.id == playlistId } ?: return
         loadIntoQueue(pl.items)
@@ -285,9 +303,25 @@ class PlaylistManager(private val context: Context) {
         }
     }
 
-    fun resetQueue() {
+    fun clearQueue() {
         _queueItems.value = emptyList()
         _currentIndex.value = -1
+        saveQueue()
+    }
+
+    fun removeFromQueue(index: Int) {
+        val items = _queueItems.value.toMutableList()
+        if (index !in items.indices) return
+        items.removeAt(index)
+        _queueItems.value = items
+        val ci = _currentIndex.value
+        _currentIndex.value = when {
+            items.isEmpty() -> -1
+            ci >= items.size -> items.size - 1
+            ci == index -> if (ci >= items.size) -1 else ci
+            ci > index -> ci - 1
+            else -> ci
+        }
         saveQueue()
     }
 }

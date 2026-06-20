@@ -42,8 +42,20 @@ class MainActivity : ComponentActivity() {
     private var inlineSurface: AndroidSurface? = null
 
     private val openFileLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? -> uri?.let { playUri(it) } }
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> -> if (uris.isNotEmpty()) playUris(uris) }
+
+    private var playlistAddTarget: String? = null
+    private val playlistFileLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
+        val target = playlistAddTarget ?: return@registerForActivityResult
+        playlistAddTarget = null
+        uris.forEach { uri ->
+            val item = PlaylistItem(uri = uri.toString())
+            playlistManager.addToPlaylist(target, item)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,6 +89,7 @@ class MainActivity : ComponentActivity() {
                     val playlists by playlistManager.playlists.collectAsStateWithLifecycle()
                     val queueItems by playlistManager.queueItems.collectAsStateWithLifecycle()
                     val queueIndex by playlistManager.currentIndex.collectAsStateWithLifecycle()
+                    var playlistPickerTarget by remember { mutableStateOf<String?>(null) }
 
                     var albumArt by remember { mutableStateOf<Bitmap?>(null) }
                     val thumbnailExtractor = remember { MediaThumbnailExtractor(this@MainActivity) }
@@ -151,6 +164,17 @@ class MainActivity : ComponentActivity() {
                             val item = currentPlaylistItem()
                             if (item != null) playlistManager.addToPlaylist(id, item)
                         },
+                        onSaveQueueAsPlaylist = { name ->
+                            playlistManager.saveQueueAsPlaylist(name)
+                        },
+                        onAddFilesToPlaylist = { id ->
+                            playlistAddTarget = id
+                            try {
+                                playlistFileLauncher.launch(arrayOf("audio/*", "video/*"))
+                            } catch (_: Exception) {}
+                        },
+                        onClearQueue = { playlistManager.clearQueue() },
+                        onRemoveQueueItem = { index -> playlistManager.removeFromQueue(index) },
                     )
 
                     if (showBrowser) {
@@ -193,23 +217,34 @@ class MainActivity : ComponentActivity() {
 
     private fun playUri(uri: Uri) {
         Log.i("Pipeline", "playUri: $uri")
-        playlistManager.loadIntoQueue(listOf(
-            PlaylistItem(uri = uri.toString(), isVideo = false)
-        ), 0)
         playUriInternal(uri)
     }
 
+    private fun playUris(uris: List<Uri>) {
+        Log.i("Pipeline", "playUris: ${uris.size} files")
+        val items = uris.map { uri ->
+            PlaylistItem(uri = uri.toString(), isVideo = false)
+        }
+        if (playlistManager.queueItems.value.isNotEmpty()) {
+            playlistManager.appendToQueue(items)
+        } else {
+            playlistManager.loadIntoQueue(items, 0)
+        }
+        playUriInternal(uris.first())
+    }
+
     private fun playUrl(url: String) {
-        mediaPlayer.stopPlayback()
-        pcmDecoder.stop()
         val isVideo = url.let { uri ->
             val path = Uri.parse(uri).path?.lowercase() ?: ""
             path.endsWith(".mp4") || path.endsWith(".mkv") || path.endsWith(".webm") ||
             path.endsWith(".avi") || path.endsWith(".mov") || path.endsWith(".3gp")
         }
-        playlistManager.loadIntoQueue(listOf(
-            PlaylistItem(uri = url, isVideo = isVideo)
-        ), 0)
+        val item = PlaylistItem(uri = url, isVideo = isVideo)
+        if (playlistManager.queueItems.value.isNotEmpty()) {
+            playlistManager.appendToQueue(listOf(item))
+        } else {
+            playlistManager.loadIntoQueue(listOf(item), 0)
+        }
         playUriInternal(Uri.parse(url))
     }
 
@@ -293,7 +328,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent.data?.let { playUri(it) }
+        intent.data?.let { uri ->
+            playlistManager.loadIntoQueue(listOf(
+                PlaylistItem(uri = uri.toString())
+            ), 0)
+            playUriInternal(uri)
+        }
     }
 
     private fun requestAudioPermissions() {

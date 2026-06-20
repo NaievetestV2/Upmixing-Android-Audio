@@ -66,6 +66,10 @@ fun MainScreen(
     onLoadPlaylist: (String) -> Unit = {},
     onPlaylistPlayItem: (Int) -> Unit = {},
     onAddCurrentToPlaylist: (String) -> Unit = {},
+    onSaveQueueAsPlaylist: (String) -> Unit = {},
+    onAddFilesToPlaylist: (String) -> Unit = {},
+    onClearQueue: () -> Unit = {},
+    onRemoveQueueItem: (Int) -> Unit = {},
 ) {
     var showDeviceSheet by remember { mutableStateOf(false) }
     var showChannelDialog by remember { mutableStateOf(false) }
@@ -252,6 +256,10 @@ fun MainScreen(
             onCycleRepeat = onCycleRepeat,
             onPlayItem = onPlaylistPlayItem,
             onAddCurrentToPlaylist = onAddCurrentToPlaylist,
+            onSaveQueueAsPlaylist = onSaveQueueAsPlaylist,
+            onAddFilesToPlaylist = onAddFilesToPlaylist,
+            onClearQueue = onClearQueue,
+            onRemoveQueueItem = onRemoveQueueItem,
         )
     }
 
