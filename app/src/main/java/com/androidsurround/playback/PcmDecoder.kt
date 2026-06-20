@@ -31,6 +31,7 @@ class PcmDecoder(private val context: Context) {
     var onError: ((String) -> Unit)? = null
 
     var outputSurface: Surface? = null
+    private var runningVideoCodec: MediaCodec? = null
 
     private var lastSeekPosMs = 0L
     private var playbackStartRealMs = 0L
@@ -83,7 +84,6 @@ class PcmDecoder(private val context: Context) {
 
         var audioTrackIdx = -1
         var videoTrackIdx = -1
-        var videoCodec: MediaCodec? = null
         var audioFormat: MediaFormat? = null
         var videoFormat: MediaFormat? = null
 
@@ -127,9 +127,9 @@ class PcmDecoder(private val context: Context) {
         audioCodec.start()
 
         if (videoTrackIdx >= 0 && outputSurface != null) {
-            videoCodec = MediaCodec.createDecoderByType(videoFormat!!.getString(MediaFormat.KEY_MIME)!!)
-            videoCodec.configure(videoFormat, outputSurface, null, 0)
-            videoCodec.start()
+            runningVideoCodec = MediaCodec.createDecoderByType(videoFormat!!.getString(MediaFormat.KEY_MIME)!!)
+            runningVideoCodec.configure(videoFormat, outputSurface, null, 0)
+            runningVideoCodec.start()
         }
 
         val bufferInfo = MediaCodec.BufferInfo()
@@ -171,17 +171,17 @@ class PcmDecoder(private val context: Context) {
                             }
                         }
                     }
-                    trackIdx == videoTrackIdx && videoCodec != null && !videoInputDone -> {
-                        val vIdx = try { videoCodec.dequeueInputBuffer(5000) } catch (e: Exception) { -1 }
+                    trackIdx == videoTrackIdx && runningVideoCodec != null && !videoInputDone -> {
+                        val vIdx = try { runningVideoCodec.dequeueInputBuffer(5000) } catch (e: Exception) { -1 }
                         if (vIdx >= 0) {
-                            val vBuf = videoCodec.getInputBuffer(vIdx) ?: continue
+                            val vBuf = runningVideoCodec.getInputBuffer(vIdx) ?: continue
                             vBuf.clear()
                             val sampleSize = extractor.readSampleData(vBuf, 0)
                             if (sampleSize < 0) {
-                                videoCodec.queueInputBuffer(vIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                runningVideoCodec.queueInputBuffer(vIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                                 videoInputDone = true
                             } else {
-                                videoCodec.queueInputBuffer(vIdx, 0, sampleSize, extractor.sampleTime, 0)
+                                runningVideoCodec.queueInputBuffer(vIdx, 0, sampleSize, extractor.sampleTime, 0)
                                 extractor.advance()
                             }
                         }
@@ -199,13 +199,13 @@ class PcmDecoder(private val context: Context) {
                                     inBuf.put(tempBuf.array(), 0, sampleSize)
                                     audioCodec.queueInputBuffer(inIdx, 0, sampleSize, extractor.sampleTime, 0)
                                 }
-                            } else if (actualTrack == videoTrackIdx && videoCodec != null && !videoInputDone) {
-                                val vIdx = try { videoCodec.dequeueInputBuffer(5000) } catch (e: Exception) { -1 }
+                            } else if (actualTrack == videoTrackIdx && runningVideoCodec != null && !videoInputDone) {
+                                val vIdx = try { runningVideoCodec.dequeueInputBuffer(5000) } catch (e: Exception) { -1 }
                                 if (vIdx >= 0) {
-                                    val vBuf = videoCodec.getInputBuffer(vIdx) ?: continue
+                                    val vBuf = runningVideoCodec.getInputBuffer(vIdx) ?: continue
                                     vBuf.clear()
                                     vBuf.put(tempBuf.array(), 0, sampleSize)
-                                    videoCodec.queueInputBuffer(vIdx, 0, sampleSize, extractor.sampleTime, 0)
+                                    runningVideoCodec.queueInputBuffer(vIdx, 0, sampleSize, extractor.sampleTime, 0)
                                 }
                             }
                             extractor.advance()
@@ -217,7 +217,13 @@ class PcmDecoder(private val context: Context) {
                 }
             }
 
-            val outIdx = audioCodec.dequeueOutputBuffer(bufferInfo, 5000)
+            val outIdx: Int
+            try {
+                outIdx = audioCodec.dequeueOutputBuffer(bufferInfo, 5000)
+            } catch (e: Exception) {
+                Log.e("PcmDecoder", "Audio codec broken, stopping", e)
+                break
+            }
             when {
                 outIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> {}
                 outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
@@ -250,21 +256,23 @@ class PcmDecoder(private val context: Context) {
                         if (playbackStartRealMs == 0L) {
                             playbackStartRealMs = System.currentTimeMillis()
                         }
-                        delay(15)
+                        val ptsMs = bufferInfo.presentationTimeUs / 1000
+                        val aheadMs = ptsMs - (System.currentTimeMillis() - playbackStartRealMs)
+                        if (aheadMs > 30) delay((aheadMs - 20).coerceAtMost(100))
                     }
                     audioCodec.releaseOutputBuffer(outIdx, false)
                 }
             }
 
-            if (videoCodec != null) {
+            if (runningVideoCodec != null) {
                 val vBufInfo = MediaCodec.BufferInfo()
-                var vOutIdx = videoCodec.dequeueOutputBuffer(vBufInfo, 0)
+                var vOutIdx = try { runningVideoCodec.dequeueOutputBuffer(vBufInfo, 0) } catch (e: Exception) { -1 }
                 while (vOutIdx >= 0) {
                     val eos = vBufInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     if (eos) videoOutputDone = true
-                    videoCodec.releaseOutputBuffer(vOutIdx, vBufInfo.presentationTimeUs <
+                    runningVideoCodec.releaseOutputBuffer(vOutIdx, vBufInfo.presentationTimeUs <
                         (totalDecodedUs + 50000))
-                    vOutIdx = videoCodec.dequeueOutputBuffer(vBufInfo, 0)
+                    vOutIdx = try { runningVideoCodec.dequeueOutputBuffer(vBufInfo, 0) } catch (e: Exception) { -1 }
                 }
             }
         }
@@ -281,8 +289,9 @@ class PcmDecoder(private val context: Context) {
 
         audioCodec.stop()
         audioCodec.release()
-        videoCodec?.stop()
-        videoCodec?.release()
+        runningVideoCodec?.stop()
+        runningVideoCodec?.release()
+        runningVideoCodec = null
         extractor.release()
     }
 
@@ -292,6 +301,15 @@ class PcmDecoder(private val context: Context) {
         extractor.seekTo(targetUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
         codec.flush()
         Log.i("PcmDecoder", "Seek done to ${targetUs / 1000}ms")
+    }
+
+    fun updateOutputSurface(surface: Surface?) {
+        outputSurface = surface
+        try {
+            runningVideoCodec?.setOutputSurface(surface)
+        } catch (e: Exception) {
+            Log.e("PcmDecoder", "setOutputSurface failed", e)
+        }
     }
 
     fun seekTo(positionMs: Long) {
@@ -385,6 +403,7 @@ class PcmDecoder(private val context: Context) {
         scope?.cancel()
         scope = null
         job = null
+        runningVideoCodec = null
         _playbackState.value = PlaybackState()
     }
 }

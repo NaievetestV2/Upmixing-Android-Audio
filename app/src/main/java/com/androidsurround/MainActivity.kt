@@ -100,7 +100,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onToggleFullscreen = { toggleFullscreen() },
                         onFullscreenSurface = { surface ->
-                            if (isFullscreen || surface == null) pcmDecoder.outputSurface = surface
+                            if (isFullscreen || surface == null) pcmDecoder.updateOutputSurface(surface)
                         },
                     )
 
@@ -177,7 +177,7 @@ class MainActivity : ComponentActivity() {
     private fun toggleFullscreen() {
         isFullscreen = !isFullscreen
         if (!isFullscreen) {
-            pcmDecoder.outputSurface = inlineSurface
+            pcmDecoder.updateOutputSurface(inlineSurface)
         }
     }
 
