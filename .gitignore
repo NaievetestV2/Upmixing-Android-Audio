@@ -11,3 +11,5 @@
 *.aab
 *.ap_
 local.properties
+
+app/build/

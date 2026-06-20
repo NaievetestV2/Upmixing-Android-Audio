@@ -1,5 +1,6 @@
 package com.androidsurround.ui
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,6 +16,8 @@ import androidx.compose.ui.unit.dp
 import com.androidsurround.model.AudioDevice
 import com.androidsurround.model.ChannelLayout
 import com.androidsurround.model.ChannelPosition
+import com.androidsurround.model.Playlist
+import com.androidsurround.model.PlaylistItem
 import com.androidsurround.model.UpmixConfig
 import com.androidsurround.playback.PlaybackState
 import com.androidsurround.root.RootShell.RootStatus
@@ -45,11 +48,30 @@ fun MainScreen(
     onSurfaceChanged: ((android.view.Surface?) -> Unit)? = null,
     onToggleFullscreen: (() -> Unit)? = null,
     onFullscreenSurface: ((android.view.Surface?) -> Unit)? = null,
+    // Playlist props
+    playlists: List<Playlist> = emptyList(),
+    queueItems: List<PlaylistItem> = emptyList(),
+    queueIndex: Int = -1,
+    isShuffled: Boolean = false,
+    repeatMode: String = "NONE",
+    albumArt: Bitmap? = null,
+    onOpenPlaylist: () -> Unit = {},
+    onNext: () -> Unit = {},
+    onPrevious: () -> Unit = {},
+    onToggleShuffle: () -> Unit = {},
+    onCycleRepeat: () -> Unit = {},
+    onCreatePlaylist: (String) -> Unit = {},
+    onRenamePlaylist: (String, String) -> Unit = { _, _ -> },
+    onDeletePlaylist: (String) -> Unit = {},
+    onLoadPlaylist: (String) -> Unit = {},
+    onPlaylistPlayItem: (Int) -> Unit = {},
+    onAddCurrentToPlaylist: (String) -> Unit = {},
 ) {
     var showDeviceSheet by remember { mutableStateOf(false) }
     var showChannelDialog by remember { mutableStateOf(false) }
     var showUpmixDialog by remember { mutableStateOf(false) }
     var showMappingDialog by remember { mutableStateOf(false) }
+    var showPlaylistSheet by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -96,6 +118,14 @@ fun MainScreen(
                 onSurfaceChanged = onSurfaceChanged,
                 hasVideoAvailable = playbackState.hasVideo || isEngineActive,
                 onToggleFullscreen = onToggleFullscreen,
+                onOpenPlaylist = { showPlaylistSheet = true },
+                onNext = onNext,
+                onPrevious = onPrevious,
+                onToggleShuffle = onToggleShuffle,
+                onCycleRepeat = onCycleRepeat,
+                isShuffled = isShuffled,
+                repeatMode = repeatMode,
+                albumArt = albumArt,
             )
 
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -203,6 +233,25 @@ fun MainScreen(
             currentMappings = deviceChannelMappings,
             onMappingChanged = onDeviceMappingChanged,
             onDismiss = { showMappingDialog = false },
+        )
+    }
+
+    if (showPlaylistSheet) {
+        PlaylistSheet(
+            playlists = playlists,
+            queueItems = queueItems,
+            currentIndex = queueIndex,
+            isShuffled = isShuffled,
+            repeatMode = repeatMode,
+            onDismiss = { showPlaylistSheet = false },
+            onCreatePlaylist = onCreatePlaylist,
+            onRenamePlaylist = onRenamePlaylist,
+            onDeletePlaylist = onDeletePlaylist,
+            onLoadPlaylist = onLoadPlaylist,
+            onToggleShuffle = onToggleShuffle,
+            onCycleRepeat = onCycleRepeat,
+            onPlayItem = onPlaylistPlayItem,
+            onAddCurrentToPlaylist = onAddCurrentToPlaylist,
         )
     }
 

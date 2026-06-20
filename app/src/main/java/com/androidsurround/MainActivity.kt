@@ -3,10 +3,11 @@ package com.androidsurround
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
-import android.view.Surface as AndroidSurface
 import android.util.Log
+import android.view.Surface as AndroidSurface
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,8 +21,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.androidsurround.audio.AudioEngine
 import com.androidsurround.audio.DeviceManager
 import com.androidsurround.model.AudioDevice
+import com.androidsurround.model.PlaylistItem
 import com.androidsurround.playback.MediaPlayerManager
+import com.androidsurround.playback.MediaThumbnailExtractor
 import com.androidsurround.playback.PcmDecoder
+import com.androidsurround.playback.PlaylistManager
 import com.androidsurround.root.RootShell
 import com.androidsurround.ui.BrowserSheet
 import com.androidsurround.ui.MainScreen
@@ -33,6 +37,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var audioEngine: AudioEngine
     private lateinit var mediaPlayer: MediaPlayerManager
     private val pcmDecoder = PcmDecoder(this)
+    private lateinit var playlistManager: PlaylistManager
     private var isFullscreen = false
     private var inlineSurface: AndroidSurface? = null
 
@@ -46,6 +51,7 @@ class MainActivity : ComponentActivity() {
         deviceManager = DeviceManager(this)
         audioEngine = AudioEngine(this)
         mediaPlayer = MediaPlayerManager(this)
+        playlistManager = PlaylistManager(this)
 
         requestAudioPermissions()
         deviceManager.refreshDevices()
@@ -67,12 +73,29 @@ class MainActivity : ComponentActivity() {
                     val rootStatusState = remember { mutableStateOf(RootShell.RootStatus()) }
                     var rootStatus: RootShell.RootStatus by rootStatusState
                     var showBrowser by remember { mutableStateOf(false) }
+
+                    val playlists by playlistManager.playlists.collectAsStateWithLifecycle()
+                    val queueItems by playlistManager.queueItems.collectAsStateWithLifecycle()
+                    val queueIndex by playlistManager.currentIndex.collectAsStateWithLifecycle()
+
+                    var albumArt by remember { mutableStateOf<Bitmap?>(null) }
+                    val thumbnailExtractor = remember { MediaThumbnailExtractor(this@MainActivity) }
+
+                    val activeState = if (isEngineActive) decoderState else playbackState
+                    LaunchedEffect(activeState.currentUri) {
+                        albumArt = null
+                        val uri = activeState.currentUri ?: return@LaunchedEffect
+                        if (!activeState.hasVideo) {
+                            albumArt = thumbnailExtractor.getAlbumArt(uri)
+                        }
+                    }
+
                     LaunchedEffect(Unit) {
                         rootStatus = RootShell.checkRoot()
                     }
 
                     MainScreen(
-                        playbackState = if (isEngineActive) decoderState else playbackState,
+                        playbackState = activeState,
                         currentLayout = currentLayout,
                         upmixConfig = upmixConfig,
                         availableDevices = availableDevices,
@@ -102,6 +125,32 @@ class MainActivity : ComponentActivity() {
                         onFullscreenSurface = { surface ->
                             if (isFullscreen || surface == null) pcmDecoder.updateOutputSurface(surface)
                         },
+                        playlists = playlists,
+                        queueItems = queueItems,
+                        queueIndex = queueIndex,
+                        isShuffled = playlistManager.isShuffled,
+                        repeatMode = playlistManager.repeatMode.name,
+                        albumArt = albumArt,
+                        onOpenPlaylist = {},
+                        onNext = { playQueueItem(playlistManager.next()) },
+                        onPrevious = { playQueueItem(playlistManager.previous()) },
+                        onToggleShuffle = { playlistManager.toggleShuffle() },
+                        onCycleRepeat = { playlistManager.cycleRepeatMode() },
+                        onCreatePlaylist = { name -> playlistManager.createPlaylist(name) },
+                        onRenamePlaylist = { id, name -> playlistManager.renamePlaylist(id, name) },
+                        onDeletePlaylist = { id -> playlistManager.deletePlaylist(id) },
+                        onLoadPlaylist = { id ->
+                            playlistManager.loadPlaylistIntoQueue(id)
+                            playQueueItem(playlistManager.currentItem)
+                        },
+                        onPlaylistPlayItem = { index ->
+                            playlistManager.playItem(index)
+                            playQueueItem(playlistManager.currentItem)
+                        },
+                        onAddCurrentToPlaylist = { id ->
+                            val item = currentPlaylistItem()
+                            if (item != null) playlistManager.addToPlaylist(id, item)
+                        },
                     )
 
                     if (showBrowser) {
@@ -118,19 +167,50 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun playUri(uri: Uri) {
-        Log.i("Pipeline", "playUri: $uri")
+    private fun currentPlaylistItem(): PlaylistItem? {
+        val state = if (audioEngine.isActive.value) pcmDecoder.playbackState.value
+                    else mediaPlayer.playbackState.value
+        val uri = state.currentUri ?: return null
+        return PlaylistItem(
+            uri = uri.toString(),
+            title = state.currentTitle,
+            durationMs = state.durationMs,
+            isVideo = state.hasVideo,
+        )
+    }
+
+    private fun playQueueItem(item: PlaylistItem?) {
+        if (item == null) return
+        playUriInternal(Uri.parse(item.uri))
+    }
+
+    private fun playUriInternal(uri: Uri) {
         mediaPlayer.stopPlayback()
         pcmDecoder.stop()
         mediaPlayer.playUri(uri)
         if (audioEngine.isActive.value) startDecoder(uri)
     }
 
+    private fun playUri(uri: Uri) {
+        Log.i("Pipeline", "playUri: $uri")
+        playlistManager.loadIntoQueue(listOf(
+            PlaylistItem(uri = uri.toString(), isVideo = false)
+        ), 0)
+        playUriInternal(uri)
+    }
+
     private fun playUrl(url: String) {
         mediaPlayer.stopPlayback()
         pcmDecoder.stop()
-        mediaPlayer.playUrl(url)
-        if (audioEngine.isActive.value) startDecoder(Uri.parse(url))
+        val isVideo = url.let { uri ->
+            val path = Uri.parse(uri).path?.lowercase() ?: ""
+            path.endsWith(".mp4") || path.endsWith(".mkv") || path.endsWith(".webm") ||
+            path.endsWith(".avi") || path.endsWith(".mov") || path.endsWith(".3gp")
+        }
+        playlistManager.loadIntoQueue(listOf(
+            PlaylistItem(uri = url, isVideo = isVideo)
+        ), 0)
+        playUriInternal(Uri.parse(url))
     }
 
     private fun togglePlayPause() {

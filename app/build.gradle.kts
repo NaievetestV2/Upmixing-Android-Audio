@@ -21,18 +21,18 @@ android {
         }
     }
 
-    val keystorePath = System.getenv("KEYSTORE_PATH")
-    val keystorePass = System.getenv("KEYSTORE_PASSWORD")
-    val keyAlias = System.getenv("KEY_ALIAS")
-    val keyPass = System.getenv("KEY_PASSWORD")
+    val envKeystorePath = System.getenv("KEYSTORE_PATH")
+    val envKeystorePass = System.getenv("KEYSTORE_PASSWORD")
+    val envKeyAlias = System.getenv("KEY_ALIAS")
+    val envKeyPass = System.getenv("KEY_PASSWORD")
 
-    if (keystorePath != null && keystorePass != null && keyAlias != null) {
+    if (envKeystorePath != null && envKeystorePass != null && envKeyAlias != null) {
         signingConfigs {
             create("ci") {
-                storeFile = file(keystorePath)
-                storePassword = keystorePass
-                keyAlias = keyAlias
-                keyPassword = keyPass ?: keystorePass
+                storeFile = file(envKeystorePath)
+                storePassword = envKeystorePass
+                keyAlias = envKeyAlias
+                keyPassword = envKeyPass ?: envKeystorePass
             }
         }
     } else {
@@ -70,11 +70,11 @@ android {
         compose = true
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/native/CMakeLists.txt")
-        }
-    }
+//    externalNativeBuild {
+//        cmake {
+//            path = file("src/main/native/CMakeLists.txt")
+//        }
+//    }
 }
 
 dependencies {
